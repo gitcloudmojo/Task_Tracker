@@ -1,0 +1,22 @@
+{
+  "name": "a1k-task-tracker",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A1K Task Tracker — assign work, mark it done, check it, approve it. Vercel/Turso edition. A CloudMojo product.",
+  "scripts": {
+    "setup": "npm --prefix server install && npm --prefix client install && npm run seed",
+    "dev": "node tools/dev.mjs",
+    "predev": "node tools/check-install.mjs both",
+    "build": "npm --prefix client run build",
+    "prebuild": "node tools/check-install.mjs client",
+    "start": "node server/src/index.js",
+    "prestart": "node tools/check-install.mjs server",
+    "seed": "npm --prefix server run seed",
+    "preseed": "node tools/check-install.mjs server",
+    "reset": "npm --prefix server run reset",
+    "prereset": "node tools/check-install.mjs server",
+    "test": "node server/test/api.mjs",
+    "pretest": "node tools/check-install.mjs server",
+    "preview:html": "npm run build && node tools/build-preview.mjs"
+  }
+}

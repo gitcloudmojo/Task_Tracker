@@ -1,0 +1,23 @@
+# docker compose up -d --build
+#
+# JWT_SECRET has no default on purpose: the server refuses to start in
+# production without one, which is the behaviour you want.
+services:
+  app:
+    build: .
+    image: a1k-task-tracker
+    restart: unless-stopped
+    ports:
+      - '4100:4100'
+    environment:
+      NODE_ENV: production
+      PORT: '4100'
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in a .env beside this file}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-12h}
+      ALERT_CRON: ${ALERT_CRON:-*/15 * * * *}
+      REVIEW_SLA_DAYS: ${REVIEW_SLA_DAYS:-2}
+      # Keep the container's clock in step with the office, so "due today"
+      # means today for the people using it.
+      TZ: ${TZ:-Asia/Kolkata}
+    volumes:
+      - ./data:/app/server/data
