@@ -18,7 +18,6 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../lib/api.js';
-import { useAuth } from '../lib/auth.jsx';
 import { Modal, Field, Segmented } from './ui.jsx';
 import { STEP_KIND, stepDueLabel } from '../lib/task.js';
 import { dateLabel } from '../lib/format.js';
@@ -36,7 +35,6 @@ export default function StepList({
   onChanged,
   onError,
 }) {
-  const { can } = useAuth();
   const [list, setList] = useState(steps);
   const [busy, setBusy] = useState(null);
   const [editing, setEditing] = useState(null);
@@ -105,7 +103,10 @@ export default function StepList({
 
   const done = list.filter((s) => s.doneAt).length;
   const openSteps = list.filter((s) => !s.doneAt && s.kind === 'step').length;
-  const assignable = can('tasks.assign') && people.length > 1;
+  // Anyone allowed to add or change a step gets to say who does it — not just
+  // an admin. `canAdd` already reflects the server's own canAddSteps check
+  // (task owner or admin), so this can never offer more than the API allows.
+  const assignable = canAdd && people.length > 1;
 
   return (
     <div className="steps">

@@ -141,6 +141,9 @@ router.patch(
     }
     if (req.body.isActive !== undefined) {
       if (req.body.isActive === false) {
+        if (target.id === req.user.id) {
+          return res.status(400).json({ error: 'You cannot deactivate your own account.' });
+        }
         const liveRow = await db
           .prepare(
             `SELECT COUNT(*) AS c FROM tasks
