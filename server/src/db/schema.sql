@@ -105,6 +105,55 @@ CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status, completion_date);
 CREATE INDEX IF NOT EXISTS idx_tasks_client ON tasks(client_name);
 
 -- ---------------------------------------------------------------------------
+-- The breakdown: the steps a task is made of.
+--
+-- A step is deliberately NOT a task with a parent. If it were, "call the client
+-- back" would need marking done, checking by the manager and approving by the
+-- CEO — the review queues would fill with fragments and every count in the app
+-- would tally a task and its parts. The three-pairs-of-eyes rule is worth
+-- something precisely because it is reserved for whole pieces of work.
+--
+-- So: the parent task keeps the chain, and a step is done when the person doing
+-- it says so. One level deep, always — sub-sub-tasks are where trackers go to
+-- die.
+--
+-- `kind` carries a distinction that turned out to be real:
+--
+--   step       a piece of the work. Past its date it is LATE.
+--   follow_up  a check-back — "chase the client on the 12th". Past its date it
+--              is WAITING ON YOU, which is not the same thing as late, and the
+--              alerts should not pretend otherwise.
+--
+-- `due_date` is optional: an item on a checklist is useful without a date, and
+-- forcing one would just get today's date typed in.
+--
+-- `owner_id` is always set explicitly, even when it is the task's owner. That
+-- way reassigning the parent can move the steps that were really that person's
+-- and leave alone the ones handed to somebody else.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS task_steps (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_id     INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  name        TEXT    NOT NULL,
+  kind        TEXT    NOT NULL DEFAULT 'step' CHECK (kind IN ('step','follow_up')),
+  owner_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  due_date    TEXT,
+  note        TEXT,
+  -- The order somebody dragged them into. Ties break on id, so a step with no
+  -- opinion about its position still lands where it was added.
+  position    INTEGER NOT NULL DEFAULT 0,
+  done_at     TEXT,
+  done_by     INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_by  INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+  updated_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_steps_task  ON task_steps(task_id, position, id);
+-- Owner + done is the index behind "what steps are on my plate", which the
+-- sweep asks once per run and Home asks on every visit.
+CREATE INDEX IF NOT EXISTS idx_steps_owner ON task_steps(owner_id, done_at);
+
+-- ---------------------------------------------------------------------------
 -- Activity.
 --
 -- Append-only. Every transition writes a row, so the history of a task is a

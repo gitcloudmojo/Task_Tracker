@@ -11,6 +11,10 @@
  *    opens a dialogue for a note and files. One click stays one click; the
  *    person with a report to attach has somewhere to put it.
  * 3. A note is genuinely required when work goes *backwards*, and only there.
+ * 4. A task with an unfinished breakdown cannot be marked done at all. Rather
+ *    than hiding the button — which only invites "why can't I?" — it stays, and
+ *    pressing it says which steps are in the way. The server refuses the same
+ *    move with the same sentence, so the two can never disagree.
  *
  * The buttons are drawn from the server's own permission flags, so a person is
  * never offered a move the API would refuse. A false flag means no button at
@@ -114,10 +118,13 @@ export default function MoveButtons({ task: t, onDone, full = false, size = 'sm'
   // The move this person is here to make, if it is one that carries evidence.
   const evidenceMove = t.canSubmit ? 'submit' : t.canVerify ? 'verify' : null;
 
-  if (!moves.length) return null;
+  // The breakdown is holding this shut. Say so where the button would be.
+  const blocked = t.blockedBySteps && t.mine && t.status === 'open';
+  if (!moves.length && !blocked) return null;
 
   const reason = ask && NEEDS_REASON[ask];
   const evidence = ask && WITH_EVIDENCE[ask];
+  const explaining = ask === 'blocked_by_steps';
   const ready = reason ? note.trim().length >= 5 : true;
   const spec = reason || evidence;
 
@@ -136,6 +143,19 @@ export default function MoveButtons({ task: t, onDone, full = false, size = 'sm'
           </button>
         ))}
 
+        {blocked && (
+          <button
+            className={`${cls} ghost steps-block`}
+            onClick={() => open('blocked_by_steps')}
+            title={`${t.stepsOpen} step${t.stepsOpen === 1 ? '' : 's'} still open — this cannot be marked done yet`}
+          >
+            <span aria-hidden="true">≡</span>
+            <span className="steps-block-text">
+              {t.stepsOpen} step{t.stepsOpen === 1 ? '' : 's'} left
+            </span>
+          </button>
+        )}
+
         {evidenceMove && (
           <button
             className={`${cls} ghost attach-move`}
@@ -148,6 +168,32 @@ export default function MoveButtons({ task: t, onDone, full = false, size = 'sm'
           </button>
         )}
       </div>
+
+      {explaining && (
+        <Modal
+          title="Finish the breakdown first"
+          onClose={close}
+          footer={
+            <button className="btn primary" onClick={close}>
+              Right you are
+            </button>
+          }
+        >
+          <div className="stack" style={{ gap: 12 }}>
+            <div>
+              <strong>
+                {t.stepsOpen} of the {t.stepTotal} in the breakdown
+              </strong>{' '}
+              {t.stepsOpen === 1 ? 'is' : 'are'} still open, so this task cannot be marked done yet.
+            </div>
+            <div className="small muted">
+              Tick them off as you finish them, or remove any that turned out not to be needed.
+              Follow-ups do not count — a check-back after delivery is not part of finishing the
+              work.
+            </div>
+          </div>
+        </Modal>
+      )}
 
       {spec && (
         <Modal

@@ -93,12 +93,26 @@ export default function Layout({ title, subtitle, actions, children }) {
             title={rail ? n.label : undefined}
             className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}
           >
+            {/* Collapsed, the count rides on the icon as a pip rather than
+                sitting in the row — a badge with `margin-left: auto` pushed the
+                icon off centre, so the two rows that had one did not line up
+                with the four that did not. */}
             <span className="nav-icon" aria-hidden="true">
               {n.icon}
+              {rail && n.badge === 'desk' && deskCount > 0 && (
+                <span className="nav-pip">{deskCount > 9 ? '9+' : deskCount}</span>
+              )}
+              {rail && n.badge === 'chat' && chatCount > 0 && (
+                <span className="nav-pip">{chatCount > 9 ? '9+' : chatCount}</span>
+              )}
             </span>
             <span className="nav-text">{n.label}</span>
-            {n.badge === 'desk' && deskCount > 0 && <span className="count alert">{deskCount}</span>}
-            {n.badge === 'chat' && chatCount > 0 && <span className="count alert">{chatCount}</span>}
+            {!rail && n.badge === 'desk' && deskCount > 0 && (
+              <span className="count alert">{deskCount}</span>
+            )}
+            {!rail && n.badge === 'chat' && chatCount > 0 && (
+              <span className="count alert">{chatCount}</span>
+            )}
           </NavLink>
         ))}
 

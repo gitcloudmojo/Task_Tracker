@@ -34,6 +34,14 @@ const ICON = {
   review_stalled: '⚑',
   approval_stalled: '⚑',
   chat_message: '✉',
+  // The breakdown. A follow-up gets the repeat mark rather than a clock,
+  // because its day arriving is not the same as being late.
+  step_assigned: '≡',
+  step_done: '✓',
+  step_due_soon: '◦',
+  step_overdue: '⏰',
+  follow_up_due: '↻',
+  steps_slipping: '⚑',
 };
 
 /** Today, yesterday, then the date. Enough grouping to be useful, no more. */

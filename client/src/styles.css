@@ -458,9 +458,11 @@ input:disabled, select:disabled, textarea:disabled { opacity: 0.6; cursor: not-a
 /* --- modal / drawer ------------------------------------------------------ */
 
 /* A dialogue is rendered where its button lives — inside a task row, whose
-   action cell is right-aligned — but it appears in the middle of the screen.
-   Without this, everything in it inherits an alignment from a place the reader
-   cannot see. */
+   action cell is right-aligned and set to `nowrap` — but it appears in the
+   middle of the screen. Without resetting both, everything in it inherits
+   typography from a place the reader cannot see: the first symptom was
+   right-aligned labels, the second was a sentence running off the edge instead
+   of wrapping. Anything else inherited from a row belongs on this list too. */
 .scrim {
   position: fixed; inset: 0; z-index: 60;
   background: rgba(11, 11, 11, 0.35);
@@ -468,6 +470,7 @@ input:disabled, select:disabled, textarea:disabled { opacity: 0.6; cursor: not-a
   padding: 48px 16px;
   overflow-y: auto;
   text-align: left;
+  white-space: normal;
 }
 .modal {
   background: var(--surface);
@@ -861,28 +864,31 @@ input:disabled, select:disabled, textarea:disabled { opacity: 0.6; cursor: not-a
 .due-date { font-size: 15px; font-weight: 620; letter-spacing: -0.01em; }
 .due-date.late { color: var(--critical); }
 
-/* The four gates as a stepper: dot above, label below, and a hairline in the
-   gap between dots. The line lives between the dots and never crosses a word —
-   an earlier version ran it behind the labels and struck the text through. */
-.steps {
+/* The four gates of the approval chain: dot above, label below, and a hairline
+   in the gap between dots. The line lives between the dots and never crosses a
+   word — an earlier version ran it behind the labels and struck the text
+   through.
+   Called gates rather than steps because "step" now means a piece of a task's
+   breakdown, and one word for two things is how stylesheets rot. */
+.gates {
   display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 4px; padding: 18px 0 4px;
 }
-.step {
+.gate {
   position: relative;
   display: flex; flex-direction: column; align-items: center; gap: 7px;
   min-width: 0; text-align: center;
 }
-.step:not(:last-child)::after {
+.gate:not(:last-child)::after {
   content: '';
   position: absolute; top: 10px; height: 2px;
   left: calc(50% + 17px); right: calc(-50% + 17px);
   background: var(--grid);
   border-radius: 2px;
 }
-.step.done:not(:last-child)::after { background: color-mix(in srgb, var(--good) 55%, transparent); }
+.gate.done:not(:last-child)::after { background: color-mix(in srgb, var(--good) 55%, transparent); }
 
-.step-dot {
+.gate-dot {
   position: relative; z-index: 1;
   width: 22px; height: 22px; flex: none; border-radius: 50%;
   display: grid; place-items: center; font-size: 11px; font-weight: 640;
@@ -890,13 +896,13 @@ input:disabled, select:disabled, textarea:disabled { opacity: 0.6; cursor: not-a
   background: var(--surface-sunken); color: var(--ink-muted);
   border: 1px solid var(--border);
 }
-.step.done .step-dot { background: var(--good); border-color: var(--good); color: #fff; }
-.step.here .step-dot { box-shadow: 0 0 0 3px var(--accent-wash); }
-.step-text { min-width: 0; display: flex; flex-direction: column; gap: 1px; max-width: 100%; }
-.step-label { font-size: 12.5px; font-weight: 560; }
-.step:not(.done) .step-label { color: var(--ink-muted); }
-.step-text .small { overflow-wrap: anywhere; }
-@media (max-width: 780px) { .steps { grid-template-columns: 1fr 1fr; row-gap: 16px; } }
+.gate.done .gate-dot { background: var(--good); border-color: var(--good); color: #fff; }
+.gate.here .gate-dot { box-shadow: 0 0 0 3px var(--accent-wash); }
+.gate-text { min-width: 0; display: flex; flex-direction: column; gap: 1px; max-width: 100%; }
+.gate-label { font-size: 12.5px; font-weight: 560; }
+.gate:not(.done) .gate-label { color: var(--ink-muted); }
+.gate-text .small { overflow-wrap: anywhere; }
+@media (max-width: 780px) { .gates { grid-template-columns: 1fr 1fr; row-gap: 16px; } }
 
 .move-bar {
   display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
@@ -1188,3 +1194,194 @@ input:disabled, select:disabled, textarea:disabled { opacity: 0.6; cursor: not-a
 /* A drawn clip sits on the text baseline better with a nudge. */
 .count-files { display: inline-flex; align-items: center; gap: 3px; }
 .file-icon { display: inline-flex; align-items: center; }
+
+/* --- the breakdown --------------------------------------------------------
+   A checklist, so it is built like one: a tick target on the left, the thing
+   on the line, its date on the right. The tick box is a real 24px target
+   rather than a styled checkbox, because it is the control people use most
+   here and a 13px checkbox is a miss waiting to happen. */
+
+.steps { display: flex; flex-direction: column; gap: 10px; }
+
+.steps-head {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  font-size: 12.5px; color: var(--ink-secondary);
+}
+.steps-count { font-variant-numeric: tabular-nums; }
+.steps-count strong { color: var(--ink); font-weight: 620; }
+.steps-bar {
+  flex: 1; min-width: 80px; max-width: 220px; height: 5px;
+  border-radius: 3px; background: var(--surface-sunken); overflow: hidden;
+}
+.steps-bar > span {
+  display: block; height: 100%; border-radius: 3px; background: var(--good);
+  transition: width 0.25s ease;
+}
+.steps-warn { color: #8a5a00; font-weight: 550; }
+:root[data-theme='dark'] .steps-warn { color: var(--warning); }
+
+.steps-note {
+  padding: 8px 11px; border-radius: var(--radius-sm); font-size: 12.5px;
+  background: color-mix(in srgb, var(--warning) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warning) 35%, transparent);
+  color: #7a4f00;
+}
+:root[data-theme='dark'] .steps-note { color: var(--warning); }
+
+.step-rows { list-style: none; margin: 0; padding: 0; }
+
+.step {
+  display: grid; grid-template-columns: 24px minmax(0, 1fr) auto auto;
+  gap: 11px; align-items: center;
+  padding: 9px 2px; border-bottom: 1px solid var(--border);
+}
+.step:last-child { border-bottom: none; }
+.step:hover { background: var(--surface-sunken); }
+/* A late step and a follow-up whose day has come are different problems, so
+   they are different colours rather than both being red. */
+.step.late { background: color-mix(in srgb, var(--critical) 5%, transparent); }
+.step.waiting { background: color-mix(in srgb, var(--warning) 8%, transparent); }
+
+.tick-box {
+  width: 22px; height: 22px; flex: none; padding: 0; cursor: pointer;
+  border-radius: 50%; border: 1.5px solid var(--border-strong);
+  background: var(--surface); color: var(--accent-ink);
+  display: grid; place-items: center; font-size: 12px; font-weight: 700;
+  transition: background 0.14s ease, border-color 0.14s ease, transform 0.1s ease;
+}
+.tick-box:hover:not(:disabled) { border-color: var(--good); background: color-mix(in srgb, var(--good) 14%, transparent); }
+.tick-box:active:not(:disabled) { transform: scale(0.92); }
+.tick-box:disabled { cursor: default; opacity: 0.75; }
+.step.done .tick-box { background: var(--good); border-color: var(--good); color: #fff; }
+
+.step-main { min-width: 0; }
+.step-name { font-size: 13.5px; font-weight: 540; line-height: 1.4; overflow-wrap: anywhere; }
+.step.done .step-name { color: var(--ink-muted); text-decoration: line-through; text-decoration-thickness: 1px; }
+.step-sub {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin-top: 2px; font-size: 11.5px; color: var(--ink-secondary);
+}
+.step-kind { color: var(--accent); font-weight: 550; }
+.step-who { font-weight: 550; }
+.step-note { overflow-wrap: anywhere; }
+.step-of { color: var(--accent); font-weight: 550; }
+.step-of:hover { text-decoration: underline; }
+.step-borrowed {
+  font-size: 10.5px; font-weight: 620; letter-spacing: 0.03em; text-transform: uppercase;
+  padding: 1px 6px; border-radius: 20px; color: var(--ink-secondary);
+  background: var(--surface-sunken); border: 1px solid var(--border);
+}
+
+.step-when {
+  justify-self: end; text-align: right; white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  display: flex; flex-direction: column; align-items: flex-end; gap: 1px;
+}
+.step-date { font-size: 12.5px; font-weight: 560; }
+.step-date.late { color: var(--critical); }
+.step.done .step-when { opacity: 0.55; }
+
+.step-do { justify-self: end; display: flex; gap: 4px; white-space: nowrap; }
+/* Edit and remove appear on hover; the primary action on a step is the tick,
+   and two extra buttons on every row would compete with it. */
+.step-do .btn.ghost { opacity: 0; transition: opacity 0.14s ease; }
+.step:hover .step-do .btn.ghost,
+.step:focus-within .step-do .btn.ghost { opacity: 1; }
+@media (hover: none) { .step-do .btn.ghost { opacity: 1; } }
+
+/* The composer. One line, and it stays put after each save. */
+.step-add {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding-top: 4px;
+}
+.step-add .seg { flex: none; }
+.step-add-name { flex: 1; min-width: 180px; }
+.step-add input[type='date'], .step-add select { flex: none; width: auto; }
+
+@media (max-width: 700px) {
+  .step { grid-template-columns: 22px minmax(0, 1fr) auto; gap: 8px 10px; }
+  .step-do { grid-column: 2 / -1; justify-self: start; }
+  .step-add-name { min-width: 140px; }
+}
+
+/* On a task row in a list: the count, and what is next. */
+.t-steps {
+  font-size: 11px; font-weight: 620; font-variant-numeric: tabular-nums;
+  padding: 1px 6px; border-radius: 20px;
+  background: var(--surface-sunken); color: var(--ink-secondary);
+  border: 1px solid var(--border);
+}
+.t-steps.late {
+  color: var(--critical); background: color-mix(in srgb, var(--critical) 10%, transparent);
+  border-color: color-mix(in srgb, var(--critical) 30%, transparent);
+}
+.t-next {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--ink-muted); font-size: 11.5px;
+}
+.t-next.critical { color: var(--critical); font-weight: 550; }
+.t-next.warning { color: #8a5a00; font-weight: 550; }
+:root[data-theme='dark'] .t-next.warning { color: var(--warning); }
+
+/* On Home the step rows have no tick box, so the grid loses its first column. */
+.step-rows.mine .step { grid-template-columns: minmax(0, 1fr) auto auto; }
+
+/* --- the breakdown, second pass ------------------------------------------- */
+
+/* A finished step is judged against its own deadline: green if it landed on
+   or before it, red if it did not. That is the one question anybody asks of a
+   step that is already ticked off. */
+.step-date.kept  { color: var(--good-text); }
+.step-date.missed { color: var(--critical); }
+.step-done-on {
+  font-size: 11.5px; font-weight: 560; color: var(--ink-muted);
+  font-variant-numeric: tabular-nums;
+}
+.step-done-on.kept  { color: var(--good-text); }
+.step-done-on.missed { color: var(--critical); }
+/* A step finished late keeps a faint red edge even once it is done, so a
+   breakdown that was delivered late still reads as one at a glance. */
+.step.done.missed { border-left: 2px solid color-mix(in srgb, var(--critical) 55%, transparent); }
+.step.done.missed:hover { background: color-mix(in srgb, var(--critical) 5%, transparent); }
+
+/* The button that stands where "Mark done" would be while steps are open. */
+.steps-block { display: inline-flex; align-items: center; gap: 6px; color: #8a5a00; }
+:root[data-theme='dark'] .steps-block { color: var(--warning); }
+.steps-block:hover {
+  color: #8a5a00; border-color: color-mix(in srgb, var(--warning) 50%, transparent);
+  background: color-mix(in srgb, var(--warning) 12%, transparent);
+}
+:root[data-theme='dark'] .steps-block:hover { color: var(--warning); }
+.steps-block-text { font-weight: 550; }
+@media (max-width: 720px) { .steps-block-text { display: none; } }
+
+/* A callout that lists things, each with its own verdict on the right. */
+.callout-list {
+  list-style: none; margin: 5px 0 0; padding: 0;
+  display: flex; flex-direction: column; gap: 3px;
+  font-size: 12.5px;
+}
+.callout-list li {
+  display: flex; align-items: baseline; gap: 7px; flex-wrap: wrap; min-width: 0;
+}
+.callout-list a { font-weight: 560; text-decoration: underline; text-underline-offset: 2px; }
+.callout-list a:hover { color: var(--accent); }
+.callout-list .due { font-size: 11.5px; }
+
+/* --- the collapsed rail ---------------------------------------------------
+   Every icon on one vertical line. The count used to sit in the row and push
+   its icon aside, so Home and Chat were 16px left of everything else. */
+.nav-icon { position: relative; display: inline-grid; place-items: center; }
+.nav-pip {
+  position: absolute; top: -6px; right: -9px;
+  min-width: 15px; height: 15px; padding: 0 3px;
+  border-radius: 8px; background: var(--critical); color: #fff;
+  font-size: 9.5px; font-weight: 640; line-height: 15px; text-align: center;
+  font-variant-numeric: tabular-nums;
+  box-shadow: 0 0 0 2px var(--surface);
+}
+.app.rail .nav-item,
+.app.rail .rail-toggle { gap: 0; }
+/* The footer's Sign out is a button, not a NavLink, and was the one row whose
+   own width rule fought the centring. */
+.app.rail .sidebar-footer .nav-item { padding-left: 0; padding-right: 0; }

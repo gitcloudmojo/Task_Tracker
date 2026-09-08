@@ -26,6 +26,7 @@ import userRoutes from './routes/users.js';
 import taskRoutes from './routes/tasks.js';
 import attachmentRoutes from './routes/attachments.js';
 import notificationRoutes from './routes/notifications.js';
+import stepRoutes from './routes/steps.js';
 import dashboardRoutes from './routes/dashboard.js';
 import chatRoutes from './routes/chat.js';
 
@@ -66,6 +67,7 @@ app.use('/api/users', userRoutes);
 app.use('/api/tasks', taskRoutes);
 app.use('/api/attachments', attachmentRoutes);
 app.use('/api/notifications', notificationRoutes);
+app.use('/api/steps', stepRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/chat', chatRoutes);
 

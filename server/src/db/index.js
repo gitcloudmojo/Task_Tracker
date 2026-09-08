@@ -135,6 +135,17 @@ async function patch() {
   if (!(await columns('notifications')).includes('snoozed_until')) {
     await client.execute('ALTER TABLE notifications ADD COLUMN snoozed_until TEXT');
   }
+
+  // The breakdown. A whole table rather than a column, so it arrives by way of
+  // schema.sql's CREATE TABLE IF NOT EXISTS on an existing database too —
+  // nothing to do here but say so, and check, because a silent assumption about
+  // which tables exist is how a migration goes wrong.
+  const tables = (
+    await client.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+  ).rows.map((t) => t.name);
+  if (!tables.includes('task_steps')) {
+    throw new Error('task_steps is missing — schema.sql did not run. The database may be read-only.');
+  }
 }
 
 /** What the app reports about where its data lives. */

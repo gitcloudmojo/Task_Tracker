@@ -105,7 +105,49 @@ router.get(
         isOverdue: overdueState(t).overdue,
       }));
 
+    /**
+     * Tasks whose insides have slipped.
+     *
+     * The earliest warning anybody gets that a task will miss: a piece of it is
+     * already late while the whole still looks fine. Computed here because Home
+     * already asks for the dashboard, and the alternative was a second request
+     * for four rows.
+     */
+    const slippingRows = await db
+      .prepare(
+        `SELECT t.id, t.name, t.client_name, t.completion_date, t.status,
+                o.name AS owner_name,
+                COUNT(s.id) AS late_steps,
+                MIN(s.due_date) AS earliest
+           FROM tasks t
+           JOIN users o ON o.id = t.owner_id
+           JOIN task_steps s ON s.task_id = t.id
+          WHERE t.status IN ('open','submitted','verified')
+            AND s.done_at IS NULL AND s.kind = 'step'
+            AND s.due_date IS NOT NULL AND s.due_date < ?
+            AND ${S.sql}
+          GROUP BY t.id
+          ORDER BY late_steps DESC, t.completion_date
+          LIMIT 8`
+      )
+      .all(today(), ...S.params);
+    const slipping = slippingRows.map((r) => ({
+      id: r.id,
+      name: r.name,
+      clientName: r.client_name,
+      ownerName: r.owner_name,
+      completionDate: r.completion_date,
+      status: r.status,
+      lateSteps: r.late_steps,
+      earliest: r.earliest,
+      daysToDue: daysToDue(r.completion_date),
+      // The interesting half: the task itself is not late yet, so nothing
+      // else in the app is shouting about it.
+      taskStillInTime: daysToDue(r.completion_date) >= 0,
+    }));
+
     res.json({
+      slipping,
       scopeLabel: scopeLabel(req.user),
       ownOnly: ownOnly(req.user),
       totals: {

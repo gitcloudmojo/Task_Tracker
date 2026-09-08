@@ -1,8 +1,9 @@
 /**
  * Who can do what, and to which tasks. Unchanged from the on-prem edition
- * except that the two functions which query the database (`assignableUsers`,
- * `chatPartners`) are now `async` and must be awaited — everything else here
- * is pure logic with no database call in it, so it did not need to change.
+ * except that the functions which query the database (`assignableUsers`,
+ * `chatPartners`, and — since the breakdown arrived — `ownsStepOf` and
+ * `canViewTask`) are now `async` and must be awaited; everything else here is
+ * pure logic with no database call in it, so it did not need to change.
  */
 import { db } from './db/index.js';
 
@@ -61,18 +62,42 @@ export const clientPermissions = (user) => permissionsFor(user.role);
 
 export const ownOnly = (user) => !can(user, 'tasks.view_all');
 
+/**
+ * SQL fragment limiting a task query to what this user may read.
+ *
+ * A user sees tasks they own or created, and — the one deliberate widening
+ * here — a task they hold a **step** of. If the manager breaks a task down and
+ * hands one step to somebody who does not own the parent, that person cannot
+ * do their part blind: they need the client, the deadline and what the task
+ * actually is. Seeing the task is not the same as being able to move it;
+ * `actionsFor` still refuses them every transition, because they are not the
+ * owner.
+ */
+const STEP_OF_MINE = (alias) =>
+  `EXISTS (SELECT 1 FROM task_steps s WHERE s.task_id = ${alias}.id AND s.owner_id = ?)`;
+
 export function taskScope(user, alias = 't') {
   if (can(user, 'tasks.view_all')) return { sql: '1=1', params: [] };
   return {
-    sql: `(${alias}.owner_id = ? OR ${alias}.created_by = ?)`,
-    params: [user.id, user.id],
+    sql: `(${alias}.owner_id = ? OR ${alias}.created_by = ? OR ${STEP_OF_MINE(alias)})`,
+    params: [user.id, user.id, user.id],
   };
 }
 
-export function canViewTask(user, task) {
+/** True when this person holds a step of this task. */
+export async function ownsStepOf(user, taskId) {
+  if (!user || !taskId) return false;
+  const row = await db
+    .prepare('SELECT 1 FROM task_steps WHERE task_id = ? AND owner_id = ? LIMIT 1')
+    .get(taskId, user.id);
+  return row !== undefined;
+}
+
+export async function canViewTask(user, task) {
   if (!task) return false;
   if (can(user, 'tasks.view_all')) return true;
-  return task.owner_id === user.id || task.created_by === user.id;
+  if (task.owner_id === user.id || task.created_by === user.id) return true;
+  return ownsStepOf(user, task.id);
 }
 
 /** Who a task may be handed to: any active person. */

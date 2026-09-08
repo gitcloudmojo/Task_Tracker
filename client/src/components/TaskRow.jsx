@@ -9,7 +9,7 @@
 import { Link } from 'react-router-dom';
 import { Badge, ClipIcon } from './ui.jsx';
 import MoveButtons from './MoveButtons.jsx';
-import { STATUS, dueLabel } from '../lib/task.js';
+import { STATUS, dueLabel, stepDueLabel } from '../lib/task.js';
 import { dateLabel } from '../lib/format.js';
 
 export default function TaskRow({
@@ -26,6 +26,15 @@ export default function TaskRow({
 }) {
   const s = STATUS[t.status] || STATUS.open;
   const due = dueLabel(t.daysToDue, t.status);
+  /**
+   * The next unfinished dated step — but only when there is something to say
+   * about it. A row that names the next step on every task doubles its own
+   * height for information the "3 of 5" pill already implies; naming it only
+   * when it is late or nearly due is the whole value of having dates on the
+   * pieces.
+   */
+  const nextDue = t.nextStep ? stepDueLabel(t.nextStep) : null;
+  const next = nextDue && (nextDue.tone === 'critical' || nextDue.tone === 'warning') ? nextDue : null;
 
   return (
     <div className={`t-row${t.isOverdue ? ' overdue' : ''}`}>
@@ -45,6 +54,28 @@ export default function TaskRow({
           {t.attachmentCount > 0 && (
             <span className="muted small count-files" title={`${t.attachmentCount} file(s)`}>
               <ClipIcon size={12} /> {t.attachmentCount}
+            </span>
+          )}
+          {/* Only when there is a breakdown. A row that says "0 of 0" on every
+              task teaches people to stop reading that part of the row. */}
+          {t.stepTotal > 0 && (
+            <span
+              className={`t-steps${t.stepsLate > 0 ? ' late' : ''}`}
+              title={
+                t.stepsLate > 0
+                  ? `${t.stepsLate} step(s) late`
+                  : `${t.stepsDone} of ${t.stepTotal} steps done`
+              }
+            >
+              {t.stepsDone}/{t.stepTotal}
+            </span>
+          )}
+          {/* The one thing worth saying about a breakdown on a crowded row:
+              what is next, and when. */}
+          {next && (
+            <span className={`t-next${next.tone ? ` ${next.tone}` : ''}`}>
+              next: {t.nextStep.name}
+              {next.text ? ` · ${next.text}` : ''}
             </span>
           )}
         </div>

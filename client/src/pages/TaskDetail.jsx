@@ -19,13 +19,20 @@ import Layout from '../components/Layout.jsx';
 import TaskModal from '../components/TaskModal.jsx';
 import ReassignModal from '../components/ReassignModal.jsx';
 import MoveButtons from '../components/MoveButtons.jsx';
+import StepList from '../components/StepList.jsx';
 import { Card, Badge, Empty, ErrorBanner, ClipIcon } from '../components/ui.jsx';
 import { STATUS, PRIORITY, ACTION_LABEL, ACTION_ICON, fileSize, dueLabel } from '../lib/task.js';
 import { dateLabel, dateTimeLabel, relativeTime } from '../lib/format.js';
 
-/** The four gates as one line of small steps. */
-function Steps({ task: t }) {
-  const steps = [
+/**
+ * The four gates of the approval chain, as one line.
+ *
+ * Named gates, not steps: a task's *steps* are now the pieces it was broken
+ * into, and calling both by the same word would confuse the reader of the code
+ * as surely as it would confuse the reader of the screen.
+ */
+function Gates({ task: t }) {
+  const gates = [
     { key: 'open', label: 'Assigned', who: t.creatorName, at: t.createdAt, done: true },
     {
       key: 'submitted',
@@ -51,17 +58,17 @@ function Steps({ task: t }) {
   ];
 
   return (
-    <div className="steps">
-      {steps.map((s, i) => (
+    <div className="gates">
+      {gates.map((s, i) => (
         <div
           key={s.key}
-          className={`step${s.done ? ' done' : ''}${t.status === s.key ? ' here' : ''}`}
+          className={`gate${s.done ? ' done' : ''}${t.status === s.key ? ' here' : ''}`}
         >
-          <span className="step-dot" aria-hidden="true">
+          <span className="gate-dot" aria-hidden="true">
             {s.done ? '✓' : i + 1}
           </span>
-          <span className="step-text">
-            <span className="step-label">{s.label}</span>
+          <span className="gate-text">
+            <span className="gate-label">{s.label}</span>
             <span className="small muted">
               {s.done && s.at ? `${s.who ? `${s.who} · ` : ''}${dateLabel(s.at)}` : 'not yet'}
             </span>
@@ -155,7 +162,16 @@ export default function TaskDetail() {
   const due = dueLabel(t.daysToDue, t.status);
   const notesChanged = (t.notes || '') !== notes;
   const canEditNotes = t.mine || t.canEdit;
-  const hasMove = t.canSubmit || t.canVerify || t.canApprove || t.canReturn || t.canCancel || t.canReopen;
+  // The bar also appears when there is no move to make *because* the breakdown
+  // is holding it — that is when the reader most needs to be told why.
+  const hasMove =
+    t.canSubmit ||
+    t.canVerify ||
+    t.canApprove ||
+    t.canReturn ||
+    t.canCancel ||
+    t.canReopen ||
+    (t.blockedBySteps && t.mine);
 
   return (
     <Layout
@@ -226,7 +242,7 @@ export default function TaskDetail() {
             </span>
           </div>
 
-          <Steps task={t} />
+          <Gates task={t} />
 
           {hasMove && (
             <div className="move-bar">
@@ -306,6 +322,34 @@ export default function TaskDetail() {
             </div>
           </Card>
         )}
+
+        {/* The breakdown sits with the work rather than with the context: it is
+            a list of things somebody still has to do, so it belongs above the
+            notes and the files, not folded away beneath them. */}
+        <Card
+          title="Breakdown"
+          hint={
+            t.stepTotal === 0
+              ? 'split it into steps, each with its own date'
+              : t.stepsLate > 0
+                ? `${t.stepsLate} late`
+                : t.followUpsOpen > 0
+                  ? `${t.followUpsOpen} follow-up${t.followUpsOpen === 1 ? '' : 's'} pending`
+                  : undefined
+          }
+          collapsible
+          defaultCollapsed={t.stepTotal === 0 && !data.canAddSteps}
+          id="task-steps"
+        >
+          <StepList
+            task={t}
+            steps={data.steps}
+            canAdd={data.canAddSteps}
+            people={people}
+            onChanged={load}
+            onError={setError}
+          />
+        </Card>
 
         <Card
           title="Notes"

@@ -28,7 +28,7 @@ router.post(
     if (!task) {
       return res.status(404).json({ error: 'Task not found' });
     }
-    if (!canViewTask(req.user, task)) {
+    if (!(await canViewTask(req.user, task))) {
       return res.status(403).json({ error: 'No access to that task' });
     }
     const a = await actionsFor(task, req.user, can);
@@ -80,7 +80,7 @@ router.get(
     if (!row) return res.status(404).json({ error: 'File not found' });
 
     const task = await db.prepare('SELECT * FROM tasks WHERE id = ?').get(row.task_id);
-    if (!canViewTask(req.user, task)) {
+    if (!(await canViewTask(req.user, task))) {
       return res.status(403).json({ error: 'No access to that file' });
     }
 
@@ -97,7 +97,7 @@ router.delete(
     if (!row) return res.status(404).json({ error: 'File not found' });
 
     const task = await db.prepare('SELECT * FROM tasks WHERE id = ?').get(row.task_id);
-    if (!canViewTask(req.user, task)) {
+    if (!(await canViewTask(req.user, task))) {
       return res.status(403).json({ error: 'No access to that file' });
     }
     if (row.uploaded_by !== req.user.id && !can(req.user, 'tasks.edit')) {

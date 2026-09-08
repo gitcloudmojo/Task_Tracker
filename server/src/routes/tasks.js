@@ -13,7 +13,7 @@ import { Router } from 'express';
 import { db, nowSql, today, withTransaction } from '../db/index.js';
 import { requireAuth, requirePermission } from '../middleware/auth.js';
 import { wrap, requireFields, oneOf, isoDate, bad } from '../lib/validate.js';
-import { can, taskScope, canViewTask, ownOnly } from '../access.js';
+import { can, taskScope, canViewTask, ownsStepOf, ownOnly } from '../access.js';
 import {
   STATUS_LABEL,
   WAITING_ON,
@@ -27,6 +27,18 @@ import {
   history,
 } from '../services/workflow.js';
 import { notifyTask } from '../services/alerts.js';
+import {
+  summariesFor,
+  withSteps,
+  stepsFor,
+  canAddSteps,
+  blockedByStepsMessage,
+  stepsBeyond,
+  handOverSteps,
+  KINDS,
+  KIND_LABEL,
+  KIND_NOTE,
+} from '../services/steps.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -93,6 +105,17 @@ async function shape(t, user) {
 
 const load = (id) => db.prepare(`${SELECT} WHERE t.id = ?`).get(id);
 
+/**
+ * Shape a page of rows and hang each one's breakdown counts off it.
+ *
+ * Done as a batch rather than inside `shape()` so a list of 200 tasks costs two
+ * extra queries instead of four hundred.
+ */
+async function shapeAll(rows, user) {
+  const summaries = await summariesFor(rows.map((r) => r.id));
+  return Promise.all(rows.map(async (t) => withSteps(await shape(t, user), summaries.get(t.id))));
+}
+
 // --- list ------------------------------------------------------------------
 
 router.get(
@@ -157,7 +180,7 @@ router.get(
     if (wantOverdue) rows = rows.filter((r) => overdueState(r).overdue);
 
     res.json({
-      tasks: await Promise.all(rows.map((t) => shape(t, req.user))),
+      tasks: await shapeAll(rows, req.user),
       canCreate: can(req.user, 'tasks.create'),
       ownOnly: ownOnly(req.user),
     });
@@ -187,20 +210,20 @@ router.get(
     const toDoRows = await db
       .prepare(`${SELECT} WHERE t.owner_id = ? AND t.status = 'open' ORDER BY t.completion_date`)
       .all(req.user.id);
-    out.toDo = await Promise.all(toDoRows.map((t) => shape(t, req.user)));
+    out.toDo = await shapeAll(toDoRows, req.user);
 
     if (can(req.user, 'tasks.verify')) {
       const rows = await db
         .prepare(`${SELECT} WHERE t.status = 'submitted' AND t.owner_id <> ? ORDER BY t.submitted_at`)
         .all(req.user.id);
-      const shaped = await Promise.all(rows.map((t) => shape(t, req.user)));
+      const shaped = await shapeAll(rows, req.user);
       out.toVerify = shaped.filter((t) => t.canVerify);
     }
     if (can(req.user, 'tasks.approve')) {
       const rows = await db
         .prepare(`${SELECT} WHERE t.status = 'verified' AND t.owner_id <> ? ORDER BY t.verified_at`)
         .all(req.user.id);
-      out.toApprove = await Promise.all(rows.map((t) => shape(t, req.user)));
+      out.toApprove = await shapeAll(rows, req.user);
     }
     res.json(out);
   })
@@ -213,7 +236,7 @@ router.get(
   wrap(async (req, res) => {
     const t = await load(req.params.id);
     if (!t) return res.status(404).json({ error: 'Task not found' });
-    if (!canViewTask(req.user, t)) return res.status(403).json({ error: 'No access to that task' });
+    if (!(await canViewTask(req.user, t))) return res.status(403).json({ error: 'No access to that task' });
 
     const attachmentRows = await db
       .prepare(
@@ -233,7 +256,23 @@ router.get(
       canDelete: a.uploaded_by === req.user.id || can(req.user, 'tasks.edit'),
     }));
 
-    res.json({ task: await shape(t, req.user), attachments, history: await history(t.id) });
+    // A step's owner can see the task — that is the deliberate widening in
+    // access.js — and it would be odd to let them read the work and not hand in
+    // their part of it, so the attach flag follows.
+    const shaped = await shape(t, req.user);
+    if (!shaped.canAttach && (await ownsStepOf(req.user, t.id)) && t.status !== 'cancelled') {
+      shaped.canAttach = t.status !== 'approved';
+    }
+
+    const summaries = await summariesFor([t.id]);
+    res.json({
+      task: withSteps(shaped, summaries.get(t.id)),
+      attachments,
+      steps: await stepsFor(t, req.user, can),
+      canAddSteps: canAddSteps(t, req.user, can),
+      stepKinds: KINDS.map((k) => ({ key: k, label: KIND_LABEL[k], note: KIND_NOTE[k] })),
+      history: await history(t.id),
+    });
   })
 );
 
@@ -298,7 +337,7 @@ router.post(
       });
     }
 
-    res.status(201).json({ task: await shape(await load(id), req.user) });
+    res.status(201).json({ task: withSteps(await shape(await load(id), req.user), null) });
   })
 );
 
@@ -309,7 +348,7 @@ router.patch(
   wrap(async (req, res) => {
     const existing = await load(req.params.id);
     if (!existing) return res.status(404).json({ error: 'Task not found' });
-    if (!canViewTask(req.user, existing)) {
+    if (!(await canViewTask(req.user, existing))) {
       return res.status(403).json({ error: 'No access to that task' });
     }
 
@@ -350,11 +389,39 @@ router.patch(
         changes.push(`priority → ${req.body.priority}`);
       }
       if (req.body.completionDate !== undefined) {
-        const dd = isoDate(req.body.completionDate, 'completionDate');
+        const d = isoDate(req.body.completionDate, 'completionDate');
+        /**
+         * The other half of "a step cannot be due after its task".
+         *
+         * Bringing the task's date forward could otherwise leave steps stranded
+         * beyond it, and the invariant would be true only at the moment a step
+         * was created. Refused rather than silently pulling the steps in with
+         * it: quietly changing somebody's committed date is worse than making
+         * them move it themselves.
+         */
+        const stranded = await stepsBeyond(existing.id, d);
+        if (stranded.length) {
+          return res.status(409).json({
+            error:
+              `${stranded.length} open step${stranded.length === 1 ? '' : 's'} would fall after ${d}: ` +
+              `${stranded.map((x) => `${x.name} (${x.due_date})`).join(', ')}. ` +
+              `Move ${stranded.length === 1 ? 'it' : 'them'} first, or make ${stranded.length === 1 ? 'it' : 'them'} a follow-up.`,
+          });
+        }
         sets.push('completion_date = ?');
-        params.push(dd);
-        changes.push(`due date → ${dd}`);
+        params.push(d);
+        changes.push(`due date → ${d}`);
       }
+      /**
+       * Reassignment.
+       *
+       * Handing work to somebody else is not an edit like changing a due date:
+       * two people's lists change, and six weeks later somebody will ask why
+       * this sat with one person for a fortnight and then moved. So it gets its
+       * own event in the history — from whom, to whom, when, and why — rather
+       * than being buried in a comma-separated "edited" line, and both people
+       * are told.
+       */
       if (req.body.ownerId !== undefined && Number(req.body.ownerId) !== existing.owner_id) {
         if (!a.canReassign) {
           return res.status(403).json({ error: 'Your role cannot reassign tasks' });
@@ -364,6 +431,8 @@ router.patch(
           .get(req.body.ownerId);
         if (!owner) return res.status(400).json({ error: 'Pick an active person' });
 
+        // Work already marked done goes back to the new owner's list: they have
+        // not done it, so they cannot inherit somebody else's "done".
         const wasSubmitted = existing.status === 'submitted';
 
         sets.push('owner_id = ?', 'reassigned_at = ?', 'reassign_count = ?');
@@ -373,6 +442,15 @@ router.patch(
           params.push('open', null, null);
         }
 
+        /**
+         * The breakdown moves with the work — but only the parts that were
+         * really this person's. Steps handed to a third person were a
+         * deliberate choice by whoever planned it, not something the new owner
+         * inherits, and a step already ticked off stays with whoever did it,
+         * because that record is the whole point.
+         */
+        const movedSteps = await handOverSteps(existing.id, existing.owner_id, owner.id, stampNow);
+
         reassignment = {
           from: existing.owner_name,
           fromId: existing.owner_id,
@@ -380,6 +458,7 @@ router.patch(
           toId: owner.id,
           reason: req.body.reassignReason ? String(req.body.reassignReason).trim() : null,
           wasSubmitted,
+          movedSteps,
         };
       }
     }
@@ -410,7 +489,10 @@ router.patch(
         note:
           `From ${reassignment.from} to ${reassignment.to}` +
           (reassignment.reason ? ` — ${reassignment.reason}` : '') +
-          (reassignment.wasSubmitted ? ' (it was marked done, so it is open again)' : ''),
+          (reassignment.wasSubmitted ? ' (it was marked done, so it is open again)' : '') +
+          (reassignment.movedSteps
+            ? ` · ${reassignment.movedSteps} open step${reassignment.movedSteps === 1 ? '' : 's'} moved too`
+            : ''),
       });
 
       await notifyTask({
@@ -426,6 +508,7 @@ router.patch(
         dedupeKey: `reassigned-to:${existing.id}:${reassignment.toId}:${stampNow}`,
       });
 
+      // The person losing it needs to know as much as the person gaining it.
       if (reassignment.fromId !== req.user.id) {
         await notifyTask({
           userId: reassignment.fromId,
@@ -441,28 +524,37 @@ router.patch(
       }
     }
 
-    res.json({ task: await shape(await load(existing.id), req.user) });
+    const fresh = await load(existing.id);
+    res.json({
+      task: withSteps(await shape(fresh, req.user), (await summariesFor([existing.id])).get(existing.id)),
+    });
   })
 );
 
 // --- the four moves --------------------------------------------------------
 
-async function transition(req, res, { action, allow, apply, prepare, event, notify }) {
+/**
+ * One place where a status actually changes. Everything a transition owes —
+ * the guard, the columns, the activity row, the people to tell — happens here
+ * inside a transaction.
+ *
+ * `prepare` fetches whatever async context `allow`/`apply` need before the
+ * guard runs (the breakdown's blocked-message, or whether this verification
+ * completes the task) — computed once and handed to both.
+ */
+async function transition(req, res, { action, allow, apply, prepare, event, notify, after }) {
   const existing = await load(req.params.id);
   if (!existing) return res.status(404).json({ error: 'Task not found' });
-  if (!canViewTask(req.user, existing)) {
+  if (!(await canViewTask(req.user, existing))) {
     return res.status(403).json({ error: 'No access to that task' });
   }
   const a = await actionsFor(existing, req.user, can);
-  const refusal = allow(a, existing, req.user);
+  const extra = prepare ? await prepare({ existing, user: req.user }) : undefined;
+  const refusal = await allow(a, existing, req.user, extra);
   if (refusal) return res.status(refusal.status).json({ error: refusal.error });
 
   const note = req.body.note ? String(req.body.note).trim() : null;
   const stamp = nowSql();
-  // A handful of transitions need one more piece of async context before
-  // `apply` (a pure, synchronous function) can decide what to write —
-  // `prepare` computes it and it is merged into apply's argument.
-  const extra = prepare ? await prepare({ existing, user: req.user }) : undefined;
   const next = apply({ existing, user: req.user, note, stamp, ...extra });
 
   await withTransaction(async (txDb) => {
@@ -484,16 +576,41 @@ async function transition(req, res, { action, allow, apply, prepare, event, noti
   });
 
   const fresh = await load(existing.id);
+  // `after` is for extra history a move owes but the status change does not —
+  // it runs before the notifications so the record is complete either way.
+  if (after) await after({ existing, fresh, user: req.user, note });
   if (notify) await notify({ existing, fresh, user: req.user, note });
-  res.json({ task: await shape(fresh, req.user) });
+  res.json({
+    task: withSteps(await shape(fresh, req.user), (await summariesFor([fresh.id])).get(fresh.id)),
+  });
 }
 
+/** The owner says it is done. */
 router.post(
   '/:id/submit',
   wrap((req, res) =>
     transition(req, res, {
       action: 'submitted',
-      allow: (a, t, u) => {
+      /**
+       * The breakdown holds the door — computed in `prepare` and checked
+       * BEFORE the permission flag. `actionsFor` knows about roles and
+       * statuses, not about steps, so `a.canSubmit` is true for an owner whose
+       * breakdown is unfinished. Ask the flag first and this rule never fires
+       * at all, which is exactly the bug the tests caught.
+       *
+       * This was a warning-and-allow once. It is a refusal now: a task whose
+       * pieces are not finished is not finished. 409 rather than 403 — the
+       * person has every right to make this move, the task is simply not
+       * ready for it.
+       */
+      prepare: async ({ existing, user }) => ({
+        blocked:
+          existing.owner_id === user.id && existing.status === 'open'
+            ? await blockedByStepsMessage(existing.id)
+            : null,
+      }),
+      allow: (a, t, u, extra) => {
+        if (extra?.blocked) return { status: 409, error: extra.blocked };
         if (a.canSubmit) return null;
         if (t.owner_id !== u.id) {
           return {
@@ -509,15 +626,24 @@ router.post(
           status: 'submitted',
           submitted_at: stamp,
           submitted_note: note,
+          // A fresh submission clears the last rejection, so the banner does
+          // not linger over work that has since been redone.
           returned_at: null,
           returned_by: null,
           return_reason: null,
         },
       }),
       notify: async ({ fresh, user }) => {
+        // Whoever can actually check it hears about it. Usually that is the
+        // manager; when the manager is the one who did the work, it is the CEO.
         const checkers = (await hasOtherChecker(fresh.owner_id))
           ? await db.prepare("SELECT id FROM users WHERE is_active = 1 AND role = 'admin' AND id <> ?").all(user.id)
           : await db.prepare("SELECT id FROM users WHERE is_active = 1 AND role = 'ceo' AND id <> ?").all(user.id);
+
+        // Worth one clause: the checker knows the pieces were finished, not
+        // just the task waved through. It is only true because submitting is
+        // refused otherwise.
+        const summary = (await summariesFor([fresh.id])).get(fresh.id);
 
         for (const v of checkers) {
           await notifyTask({
@@ -525,7 +651,9 @@ router.post(
             type: 'task_submitted',
             severity: 'info',
             title: `To check: ${fresh.name}`,
-            body: `${user.name} marked this done for ${fresh.client_name}.`,
+            body:
+              `${user.name} marked this done for ${fresh.client_name}.` +
+              (summary?.total ? ' Every step in the breakdown is ticked off.' : ''),
             taskId: fresh.id,
             dedupeKey: `submitted:${fresh.id}:${v.id}:${fresh.submitted_at}`,
           });
@@ -535,6 +663,7 @@ router.post(
   )
 );
 
+/** An admin confirms it came back done. */
 router.post(
   '/:id/verify',
   wrap((req, res) =>
@@ -550,6 +679,8 @@ router.post(
         }
         return { status: 403, error: 'Only the manager checks submitted work' };
       },
+      // When the owner is the only possible approver — the CEO's own work —
+      // verification is the last gate rather than leaving it stuck.
       prepare: async ({ existing }) => ({ completesTask: await verifyCompletesTask(existing) }),
       apply: ({ user, note, stamp, completesTask }) => {
         if (completesTask) {
@@ -610,12 +741,27 @@ router.post(
   )
 );
 
+/** The CEO signs it off. */
 router.post(
   '/:id/approve',
   wrap((req, res) =>
     transition(req, res, {
       action: 'approved',
-      allow: (a, t, u) => {
+      /**
+       * Approval is the real close, so the breakdown gates it too.
+       *
+       * Submitting is already refused with an open step, so this only bites
+       * when a step was *added after* the work was marked done — which is
+       * legitimate and does happen. The manager can still check it (she is
+       * the human judgement in the chain, and blocking her would strand the
+       * task); the final signature waits until the pieces are actually
+       * finished or removed.
+       */
+      prepare: async ({ existing }) => ({ blocked: await blockedByStepsMessage(existing.id) }),
+      allow: (a, t, u, extra) => {
+        if (extra?.blocked && t.status === 'verified') {
+          return { status: 409, error: `This cannot be signed off yet. ${extra.blocked}` };
+        }
         if (a.canApprove) return null;
         if (t.owner_id === u.id) {
           return { status: 403, error: 'You cannot approve your own work' };
@@ -660,6 +806,7 @@ router.post(
   )
 );
 
+/** Either gate can send it back, and must say why. */
 router.post(
   '/:id/return',
   wrap(async (req, res) => {
