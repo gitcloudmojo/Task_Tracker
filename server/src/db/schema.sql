@@ -154,6 +154,31 @@ CREATE INDEX IF NOT EXISTS idx_steps_task  ON task_steps(task_id, position, id);
 CREATE INDEX IF NOT EXISTS idx_steps_owner ON task_steps(owner_id, done_at);
 
 -- ---------------------------------------------------------------------------
+-- Projects.
+--
+-- Deliberately not derived from `tasks.client_name`. A task's client is
+-- billing information; a project here is the manager's own note of who is on
+-- which engagement — added, renamed and staffed by hand, from the Projects
+-- screen alone. Nothing else in the app reads these two tables, and deleting
+-- a project touches nothing but its own membership rows.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS projects (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  name        TEXT    NOT NULL UNIQUE,
+  created_by  INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+  updated_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS project_members (
+  project_id  INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  added_at    TEXT    NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (project_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_project_members_user ON project_members(user_id);
+
+-- ---------------------------------------------------------------------------
 -- Activity.
 --
 -- Append-only. Every transition writes a row, so the history of a task is a

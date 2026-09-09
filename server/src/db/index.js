@@ -146,6 +146,9 @@ async function patch() {
   if (!tables.includes('task_steps')) {
     throw new Error('task_steps is missing — schema.sql did not run. The database may be read-only.');
   }
+  if (!tables.includes('projects')) {
+    throw new Error('projects is missing — schema.sql did not run. The database may be read-only.');
+  }
 }
 
 /** What the app reports about where its data lives. */

@@ -1,53 +1,142 @@
 /**
- * Projects — one screen for the manager: every client name that has ever had
- * a task, and who is currently on it.
+ * Projects — a manager's own reference list, kept entirely by hand.
  *
- * There is no `projects` table. A project here is `tasks.client_name`, and
- * "who is on it" is found the same way the rest of the app finds that:
- * whoever owns a task for that client. Cancelled tasks do not count — a
- * cancelled task never happened, so it puts nobody "on" anything.
+ * This is deliberately NOT derived from tasks.client_name. A task's "Client"
+ * field is billing information; a project here is just the manager's note of
+ * who is on which engagement — created, renamed and staffed by hand, and read
+ * by nobody else in the app. Deleting a project touches nothing but its own
+ * two rows.
  */
 import { Router } from 'express';
-import { db } from '../db/index.js';
+import { db, nowSql } from '../db/index.js';
 import { requireAuth, requirePermission } from '../middleware/auth.js';
-import { wrap } from '../lib/validate.js';
+import { wrap, requireFields, bad } from '../lib/validate.js';
 
 const router = Router();
 router.use(requireAuth);
 router.use(requirePermission('projects.view'));
 
+const MAX_NAME = 120;
+
+function cleanName(name) {
+  const n = String(name ?? '').trim();
+  if (n.length < 2) bad('Give the project a name');
+  if (n.length > MAX_NAME) bad(`Keep the name under ${MAX_NAME} characters`);
+  return n;
+}
+
+/** Only active people can be added — same rule as assigning a task. */
+async function cleanMemberIds(memberIds) {
+  const ids = [...new Set((Array.isArray(memberIds) ? memberIds : []).map(Number))].filter((n) =>
+    Number.isInteger(n)
+  );
+  if (!ids.length) return [];
+  const placeholders = ids.map(() => '?').join(',');
+  const rows = await db
+    .prepare(`SELECT id FROM users WHERE is_active = 1 AND id IN (${placeholders})`)
+    .all(...ids);
+  return rows.map((r) => r.id);
+}
+
+async function replaceMembers(projectId, memberIds) {
+  await db.prepare('DELETE FROM project_members WHERE project_id = ?').run(projectId);
+  for (const uid of memberIds) {
+    await db
+      .prepare('INSERT INTO project_members (project_id, user_id) VALUES (?, ?)')
+      .run(projectId, uid);
+  }
+}
+
+/** Attach each project's members, one extra query for the whole list. */
+async function withMembers(rows) {
+  if (!rows.length) return [];
+  const ids = rows.map((r) => r.id);
+  const placeholders = ids.map(() => '?').join(',');
+  const members = await db
+    .prepare(
+      `SELECT pm.project_id AS project_id, u.id, u.name, u.role, u.team, u.title, u.is_active
+         FROM project_members pm JOIN users u ON u.id = pm.user_id
+        WHERE pm.project_id IN (${placeholders})
+        ORDER BY u.name`
+    )
+    .all(...ids);
+  const byProject = new Map(ids.map((id) => [id, []]));
+  for (const m of members) {
+    byProject.get(m.project_id).push({
+      id: m.id,
+      name: m.name,
+      role: m.role,
+      team: m.team,
+      title: m.title,
+      isActive: Boolean(m.is_active),
+    });
+  }
+  return rows.map((r) => ({ id: r.id, name: r.name, createdAt: r.created_at, people: byProject.get(r.id) || [] }));
+}
+
 router.get(
   '/',
   wrap(async (req, res) => {
-    const rows = await db
-      .prepare(
-        `SELECT DISTINCT t.client_name AS project,
-                u.id, u.name, u.role, u.team, u.title, u.is_active
-           FROM tasks t
-           JOIN users u ON u.id = t.owner_id
-          WHERE t.status <> 'cancelled'
-          ORDER BY t.client_name, u.name`
-      )
-      .all();
+    const rows = await db.prepare('SELECT * FROM projects ORDER BY name').all();
+    res.json({ projects: await withMembers(rows) });
+  })
+);
 
-    const byProject = new Map();
-    for (const r of rows) {
-      if (!byProject.has(r.project)) byProject.set(r.project, []);
-      byProject.get(r.project).push({
-        id: r.id,
-        name: r.name,
-        role: r.role,
-        team: r.team,
-        title: r.title,
-        isActive: Boolean(r.is_active),
-      });
+router.post(
+  '/',
+  wrap(async (req, res) => {
+    requireFields(req.body, ['name']);
+    const name = cleanName(req.body.name);
+    if (await db.prepare('SELECT 1 FROM projects WHERE lower(name) = lower(?)').get(name)) {
+      return res.status(409).json({ error: 'A project with that name already exists' });
     }
 
-    const projects = [...byProject.entries()]
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([name, people]) => ({ name, people }));
+    const memberIds = await cleanMemberIds(req.body.memberIds);
+    const info = await db
+      .prepare('INSERT INTO projects (name, created_by) VALUES (?, ?)')
+      .run(name, req.user.id);
+    const projectId = info.lastInsertRowid;
+    await replaceMembers(projectId, memberIds);
 
-    res.json({ projects });
+    const [project] = await withMembers([{ id: projectId, name }]);
+    res.status(201).json({ project });
+  })
+);
+
+router.patch(
+  '/:id',
+  wrap(async (req, res) => {
+    const project = await db.prepare('SELECT * FROM projects WHERE id = ?').get(req.params.id);
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    let name = project.name;
+    if (req.body.name !== undefined) {
+      name = cleanName(req.body.name);
+      const clash = await db
+        .prepare('SELECT 1 FROM projects WHERE lower(name) = lower(?) AND id <> ?')
+        .get(name, project.id);
+      if (clash) return res.status(409).json({ error: 'A project with that name already exists' });
+      await db
+        .prepare('UPDATE projects SET name = ?, updated_at = ? WHERE id = ?')
+        .run(name, nowSql(), project.id);
+    }
+
+    if (req.body.memberIds !== undefined) {
+      await replaceMembers(project.id, await cleanMemberIds(req.body.memberIds));
+    }
+
+    const [updated] = await withMembers([{ id: project.id, name }]);
+    res.json({ project: updated });
+  })
+);
+
+router.delete(
+  '/:id',
+  wrap(async (req, res) => {
+    const project = await db.prepare('SELECT id FROM projects WHERE id = ?').get(req.params.id);
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    await db.prepare('DELETE FROM projects WHERE id = ?').run(project.id);
+    res.json({ ok: true });
   })
 );
 
