@@ -42,6 +42,7 @@ const GRANTS = {
     'team.view',
     'team.manage',
     'reports.view',
+    'projects.view',
   ],
   user: ['tasks.view_own', 'team.view'],
 };

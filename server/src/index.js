@@ -29,6 +29,7 @@ import notificationRoutes from './routes/notifications.js';
 import stepRoutes from './routes/steps.js';
 import dashboardRoutes from './routes/dashboard.js';
 import chatRoutes from './routes/chat.js';
+import projectRoutes from './routes/projects.js';
 
 export const app = express();
 app.use(cors({ origin: config.clientOrigin, credentials: true }));
@@ -70,6 +71,7 @@ app.use('/api/notifications', notificationRoutes);
 app.use('/api/steps', stepRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/chat', chatRoutes);
+app.use('/api/projects', projectRoutes);
 
 app.use('/api', (req, res) => res.status(404).json({ error: 'No such endpoint' }));
 
