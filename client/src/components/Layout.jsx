@@ -18,15 +18,17 @@ import { Switch } from './ui.jsx';
 import Alerts from './Alerts.jsx';
 
 /**
- * Five items at most, and a team member only ever sees three. Every screen
- * that used to be here — My tasks, Reports — folded into one of these, because
- * a menu is a list of decisions and most of those decisions were not real.
+ * Five items at most, and a team member only ever sees three — Projects is
+ * manager-only, so it never adds a fourth for them. Every screen that used to
+ * be here — My tasks, Reports — folded into one of these, because a menu is a
+ * list of decisions and most of those decisions were not real.
  */
 const NAV = [
   { to: '/', label: 'Home', icon: '◱', permission: null, badge: 'desk' },
   { to: '/tasks', label: 'All tasks', icon: '☰', permission: 'tasks.view_all' },
   { to: '/chat', label: 'Chat', icon: '✉', permission: null, badge: 'chat' },
   { to: '/team', label: 'People', icon: '⚇', permission: 'team.view' },
+  { to: '/projects', label: 'Projects', icon: '▤', permission: 'projects.view' },
 ];
 
 const RAIL_KEY = 'cloudmojo.tracker.sidebar';

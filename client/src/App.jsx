@@ -6,6 +6,7 @@ import Tasks from './pages/Tasks.jsx';
 import TaskDetail from './pages/TaskDetail.jsx';
 import Chat from './pages/Chat.jsx';
 import Team from './pages/Team.jsx';
+import Projects from './pages/Projects.jsx';
 import Settings from './pages/Settings.jsx';
 
 function Shell() {
@@ -33,6 +34,7 @@ function Shell() {
       <Route path="/chat" element={<Chat />} />
       <Route path="/chat/:userId" element={<Chat />} />
       <Route path="/team" element={guard('team.view', <Team />)} />
+      <Route path="/projects" element={guard('projects.view', <Projects />)} />
       <Route path="/settings" element={<Settings />} />
       {/* The screens that folded into the ones above. Old links still work. */}
       <Route path="/mine" element={home} />
