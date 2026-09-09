@@ -13,8 +13,9 @@
  * showed everything at once, which meant nothing led.
  */
 import { useEffect, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api } from '../lib/api.js';
+import { useAuth } from '../lib/auth.jsx';
 import Layout from '../components/Layout.jsx';
 import TaskModal from '../components/TaskModal.jsx';
 import ReassignModal from '../components/ReassignModal.jsx';
@@ -81,6 +82,8 @@ function Gates({ task: t }) {
 
 export default function TaskDetail() {
   const { id } = useParams();
+  const navigate = useNavigate();
+  const { can } = useAuth();
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -91,6 +94,8 @@ export default function TaskDetail() {
   const [notes, setNotes] = useState('');
   const [savingNotes, setSavingNotes] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   const load = () =>
     api
@@ -134,6 +139,18 @@ export default function TaskDetail() {
       setError(err);
     } finally {
       setUploading(false);
+    }
+  };
+
+  const remove = async () => {
+    setDeleting(true);
+    setError(null);
+    try {
+      await api.del(`/tasks/${id}`);
+      navigate('/');
+    } catch (err) {
+      setError(err);
+      setDeleting(false);
     }
   };
 
@@ -192,11 +209,30 @@ export default function TaskDetail() {
               Edit
             </button>
           )}
+          {can('tasks.delete') && (
+            <button
+              className="btn danger"
+              disabled={deleting}
+              onClick={() => (confirmDelete ? remove() : setConfirmDelete(true))}
+              onBlur={() => setConfirmDelete(false)}
+            >
+              {deleting ? 'Deleting…' : confirmDelete ? 'Click again to confirm' : 'Delete task'}
+            </button>
+          )}
         </>
       }
     >
       <div className="stack">
         <ErrorBanner error={error} />
+        {confirmDelete && (
+          <div className="callout warn">
+            <div>
+              <strong>This permanently deletes the task</strong> — its steps, history, and files go
+              with it. There is no undo. Click "Click again to confirm" to proceed, or click anywhere
+              else to cancel.
+            </div>
+          </div>
+        )}
 
         {/* Sent back: the first thing the owner must see. */}
         {t.returnedAt && t.status === 'open' && (

@@ -14,7 +14,7 @@ import Layout from '../components/Layout.jsx';
 import { Card, Badge, Empty, ErrorBanner, Modal, Field, Segmented } from '../components/ui.jsx';
 import { initialsOf } from '../lib/format.js';
 
-const ROLE_TONE = { ceo: 'accent', admin: 'warning', user: '' };
+const ROLE_TONE = { superadmin: 'critical', ceo: 'accent', admin: 'warning', user: '' };
 
 const blank = { name: '', email: '', password: '', role: 'user', team: '', title: '' };
 
@@ -28,6 +28,7 @@ export default function Team() {
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState(blank);
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [filter, setFilter] = useState('active');
 
   const load = () =>
@@ -53,6 +54,7 @@ export default function Team() {
       if (editing) {
         await api.patch(`/users/${editing.id}`, {
           name: form.name,
+          email: form.email.trim(),
           title: form.title || null,
           team: form.team || null,
           role: form.role,
@@ -81,10 +83,27 @@ export default function Team() {
     }
   };
 
+  const remove = async (person) => {
+    setDeleting(true);
+    setError(null);
+    try {
+      await api.del(`/users/${person.id}`);
+      setAdding(false);
+      setEditing(null);
+      setForm(blank);
+      await load();
+    } catch (err) {
+      setError(err);
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   const shown = users.filter((u) => (filter === 'active' ? u.isActive : true));
   const ready =
     form.name.trim() &&
-    (editing || (form.email.trim() && form.password.length >= 8)) &&
+    form.email.trim() &&
+    (editing || form.password.length >= 8) &&
     form.role;
 
   return (
@@ -181,6 +200,7 @@ export default function Team() {
                                 setForm({
                                   ...blank,
                                   name: u.name,
+                                  email: u.email,
                                   role: u.role,
                                   team: u.team || '',
                                   title: u.title || '',
@@ -251,16 +271,27 @@ export default function Team() {
           wide
           footer={
             <>
+              {editing && can('users.delete') && editing.id !== user.id && (
+                <button
+                  className="btn danger"
+                  onClick={() => remove(editing)}
+                  disabled={saving || deleting}
+                  style={{ marginRight: 'auto' }}
+                >
+                  {deleting ? 'Deleting…' : 'Delete permanently'}
+                </button>
+              )}
               <button
                 className="btn"
                 onClick={() => {
                   setAdding(false);
                   setEditing(null);
                 }}
+                disabled={saving || deleting}
               >
                 Cancel
               </button>
-              <button className="btn primary" onClick={save} disabled={saving || !ready}>
+              <button className="btn primary" onClick={save} disabled={saving || deleting || !ready}>
                 {saving ? 'Saving…' : editing ? 'Save changes' : 'Add person'}
               </button>
             </>
@@ -272,11 +303,9 @@ export default function Team() {
               <Field label="Full name *">
                 <input type="text" value={form.name} onChange={set('name')} autoFocus />
               </Field>
-              {!editing && (
-                <Field label="Work email *">
-                  <input type="email" value={form.email} onChange={set('email')} />
-                </Field>
-              )}
+              <Field label="Work email *">
+                <input type="email" value={form.email} onChange={set('email')} />
+              </Field>
               {!editing && (
                 <Field label="Temporary password *" help="At least 8 characters. They can change it in Settings.">
                   <input type="password" value={form.password} onChange={set('password')} />
@@ -284,12 +313,13 @@ export default function Team() {
               )}
               <Field
                 label="Role *"
-                help="A team member does the work. A manager assigns it and checks it. The CEO approves."
+                help="A team member does the work. A manager assigns it, checks it, and manages people. The CEO approves. Super Admin can do all of that, plus permanently delete people and tasks."
               >
                 <select value={form.role} onChange={set('role')}>
                   <option value="user">Team member</option>
                   <option value="admin">Manager</option>
-                  {user.role === 'ceo' && <option value="ceo">CEO</option>}
+                  {(user.role === 'ceo' || user.role === 'superadmin') && <option value="ceo">CEO</option>}
+                  {user.role === 'superadmin' && <option value="superadmin">Super Admin</option>}
                 </select>
               </Field>
               <Field label="Team" help="A label for grouping — it does not affect what they can do.">
@@ -310,6 +340,12 @@ export default function Team() {
               <div className="notice">
                 A manager checks work that has been marked done — but never their own. If a manager
                 owns a task, another manager or the CEO has to check it.
+              </div>
+            )}
+            {form.role === 'superadmin' && (
+              <div className="notice">
+                Super Admin can permanently delete people and tasks — there is no undo. Reserve this
+                for the one account that should hold it.
               </div>
             )}
           </div>
