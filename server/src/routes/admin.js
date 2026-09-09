@@ -42,10 +42,18 @@ const SEED_TASKS = {
   19: ['Runbook handover for the Medhaa night shift', 'Medhaa Health'],
 };
 
-// The seed script's five demo chat messages. Cleared only if the table still
-// holds exactly that many — if real chat has happened since, this is skipped
+// Not seed data — the real task created after go-live. The user explicitly
+// asked to remove this specific one too, once they were done using it to
+// test the app. Same name/client safety check as the rows above.
+const EXTRA_TASKS = {
+  20: ['Migration', 'Internal'],
+};
+
+// The seed script's eight demo chat messages (3 with the CEO, 2 with DevOps,
+// 2 with Sales, 1 with Finance). Cleared only if the table still holds
+// exactly that many — if real chat has happened since, this is skipped
 // rather than wiping anything real.
-const EXPECTED_CHAT_COUNT = 5;
+const EXPECTED_CHAT_COUNT = 8;
 
 router.post(
   '/purge-seed-data',
@@ -53,7 +61,7 @@ router.post(
     const deleted = [];
     const skipped = [];
 
-    for (const [idStr, [name, client]] of Object.entries(SEED_TASKS)) {
+    for (const [idStr, [name, client]] of Object.entries({ ...SEED_TASKS, ...EXTRA_TASKS })) {
       const id = Number(idStr);
       const row = await db.prepare('SELECT id, name, client_name FROM tasks WHERE id = ?').get(id);
       if (!row) {
