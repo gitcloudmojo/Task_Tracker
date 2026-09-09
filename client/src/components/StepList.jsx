@@ -289,8 +289,8 @@ export default function StepList({
           />
           <button
             className="btn primary sm"
-            disabled={busy === 'new' || name.trim().length < 3 || (kind === 'step' && !due)}
-            title={kind === 'step' && !due ? 'Pick a date this step is due by' : undefined}
+            disabled={busy === 'new' || name.trim().length < 3 || !due}
+            title={!due ? (kind === 'follow_up' ? 'Pick a date to check back on' : 'Pick a date this step is due by') : undefined}
           >
             {busy === 'new' ? 'Adding…' : 'Add'}
           </button>
@@ -354,8 +354,8 @@ function EditStep({ step, task, people, assignable, onClose, onSaved, onError })
           <button
             className="btn primary"
             onClick={save}
-            disabled={busy || name.trim().length < 3 || (kind === 'step' && !due)}
-            title={kind === 'step' && !due ? 'Pick a date this step is due by' : undefined}
+            disabled={busy || name.trim().length < 3 || !due}
+            title={!due ? (kind === 'follow_up' ? 'Pick a date to check back on' : 'Pick a date this step is due by') : undefined}
           >
             {busy ? 'Saving…' : 'Save'}
           </button>
@@ -388,7 +388,7 @@ function EditStep({ step, task, people, assignable, onClose, onSaved, onError })
             label={kind === 'follow_up' ? 'Check back on' : 'Done by'}
             help={
               kind === 'follow_up'
-                ? 'Optional, and may fall after the task itself.'
+                ? 'Required, but may fall after the task itself.'
                 : `Required, and no later than the task itself (${task.completionDate}).`
             }
           >

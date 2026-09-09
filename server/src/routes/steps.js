@@ -110,13 +110,16 @@ async function readStepFields(body, task, { partial = false, existing = null } =
   }
 
   /**
-   * A step needs a date — without one there is nothing for "late" to mean,
-   * and no answer to "by when?" A follow-up is exempt: "check back on" is
-   * often genuinely open-ended, which is the whole reason it is a different
-   * kind rather than a step with no date.
+   * Every step and follow-up needs a date — without one there is nothing for
+   * "late" to mean, and no answer to "by when?" (Follow-ups are still exempt
+   * from the completion-date cap above; they just cannot be dateless too.)
    */
-  if (kindNow === 'step' && !dateNow) {
-    bad('Give this step a date to be done by, or mark it a follow-up instead');
+  if (!dateNow) {
+    bad(
+      kindNow === 'follow_up'
+        ? 'Give this follow-up a date to check back on'
+        : 'Give this step a date to be done by'
+    );
   }
 
   if (body.note !== undefined) {
