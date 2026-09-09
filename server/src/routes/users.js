@@ -136,6 +136,12 @@ router.patch(
     if (APPOINTERS[target.role] && !APPOINTERS[target.role].includes(req.user.role)) {
       return res.status(403).json({ error: `The ${ROLE_LABEL[target.role]} account cannot be edited here` });
     }
+    // A manager can still edit their own account (below), but not a peer
+    // manager's — that is reserved for the CEO or a Super Admin, same as it
+    // already is for CEO and Super Admin accounts above.
+    if (target.role === 'admin' && req.user.role === 'admin' && target.id !== req.user.id) {
+      return res.status(403).json({ error: 'Another Manager account can only be changed by the CEO or Super Admin.' });
+    }
 
     const sets = [];
     const params = [];
@@ -228,6 +234,11 @@ router.delete(
     }
     if (APPOINTERS[target.role] && !APPOINTERS[target.role].includes(req.user.role)) {
       return res.status(403).json({ error: `The ${ROLE_LABEL[target.role]} account cannot be deleted here` });
+    }
+    // Self-delete is already refused above, so this only fires for a peer —
+    // one manager deleting another. Reserved for the CEO or a Super Admin.
+    if (target.role === 'admin' && req.user.role === 'admin') {
+      return res.status(403).json({ error: 'Another Manager account can only be deleted by the CEO or Super Admin.' });
     }
 
     const blocks = [];
