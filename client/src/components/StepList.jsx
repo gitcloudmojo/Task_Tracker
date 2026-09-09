@@ -287,7 +287,11 @@ export default function StepList({
                 : `When this piece must be done, at the latest ${task.completionDate}`
             }
           />
-          <button className="btn primary sm" disabled={busy === 'new' || name.trim().length < 3}>
+          <button
+            className="btn primary sm"
+            disabled={busy === 'new' || name.trim().length < 3 || (kind === 'step' && !due)}
+            title={kind === 'step' && !due ? 'Pick a date this step is due by' : undefined}
+          >
             {busy === 'new' ? 'Adding…' : 'Add'}
           </button>
         </form>
@@ -350,7 +354,8 @@ function EditStep({ step, task, people, assignable, onClose, onSaved, onError })
           <button
             className="btn primary"
             onClick={save}
-            disabled={busy || name.trim().length < 3}
+            disabled={busy || name.trim().length < 3 || (kind === 'step' && !due)}
+            title={kind === 'step' && !due ? 'Pick a date this step is due by' : undefined}
           >
             {busy ? 'Saving…' : 'Save'}
           </button>
@@ -384,7 +389,7 @@ function EditStep({ step, task, people, assignable, onClose, onSaved, onError })
             help={
               kind === 'follow_up'
                 ? 'Optional, and may fall after the task itself.'
-                : `Optional, and no later than the task itself (${task.completionDate}).`
+                : `Required, and no later than the task itself (${task.completionDate}).`
             }
           >
             <input
