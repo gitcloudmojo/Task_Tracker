@@ -7,21 +7,50 @@
  */
 import { db } from './db/index.js';
 
-export const ROLES = ['ceo', 'admin', 'user'];
+export const ROLES = ['superadmin', 'ceo', 'admin', 'user'];
 
 export const ROLE_LABEL = {
+  superadmin: 'Super Admin',
   ceo: 'CEO',
   admin: 'Manager',
   user: 'Team member',
 };
 
 export const ROLE_NOTE = {
+  superadmin: 'The one account above everything else — approves like the CEO, manages and permanently deletes people and tasks like the Manager, and is the only role that can create another Super Admin.',
   ceo: 'Sees every task and gives the final approval.',
   admin: 'Assigns work, checks it came back done, and manages people.',
   user: 'Sees their own tasks and marks them done for the manager to check.',
 };
 
+// Roles above this one on the appointment ladder (see routes/users.js): who
+// may create or edit an account holding a given role. 'ceo' can be appointed
+// by 'ceo' or 'superadmin'; 'superadmin' only by another 'superadmin'. This is
+// the same idea as the pre-existing "only the CEO can appoint another CEO"
+// rule, extended one level up rather than replaced.
+export const APPOINTERS = {
+  superadmin: ['superadmin'],
+  ceo: ['ceo', 'superadmin'],
+};
+
 const GRANTS = {
+  superadmin: [
+    'tasks.view_all',
+    'tasks.approve',
+    'tasks.verify',
+    'tasks.reopen',
+    'tasks.export',
+    'tasks.create',
+    'tasks.edit',
+    'tasks.assign',
+    'tasks.cancel',
+    'tasks.delete',
+    'team.view',
+    'team.manage',
+    'users.delete',
+    'reports.view',
+    'projects.view',
+  ],
   ceo: [
     'tasks.view_all',
     'tasks.approve',
@@ -37,10 +66,12 @@ const GRANTS = {
     'tasks.edit',
     'tasks.assign',
     'tasks.cancel',
+    'tasks.delete',
     'tasks.verify',
     'tasks.export',
     'team.view',
     'team.manage',
+    'users.delete',
     'reports.view',
     'projects.view',
   ],
@@ -119,7 +150,14 @@ export function scopeLabel(user) {
 export function canTalk(a, b) {
   if (!a || !b || a.id === b.id) return false;
   const pair = [a.role, b.role].sort().join('+');
-  return pair === 'admin+ceo' || pair === 'admin+user';
+  return (
+    pair === 'admin+ceo' ||
+    pair === 'admin+user' ||
+    // Super Admin sits above the whole chain and can reach anyone on it.
+    pair === 'ceo+superadmin' ||
+    pair === 'admin+superadmin' ||
+    pair === 'superadmin+user'
+  );
 }
 
 /** Everybody this person may open a thread with. */
@@ -127,7 +165,8 @@ export async function chatPartners(user) {
   const rows = await db
     .prepare(
       `SELECT id, name, email, role, team, title FROM users
-        WHERE is_active = 1 AND id <> ? ORDER BY role = 'ceo' DESC, role = 'admin' DESC, name`
+        WHERE is_active = 1 AND id <> ?
+        ORDER BY role = 'superadmin' DESC, role = 'ceo' DESC, role = 'admin' DESC, name`
     )
     .all(user.id);
   return rows.filter((r) => canTalk(user, r));

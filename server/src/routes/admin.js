@@ -1,17 +1,18 @@
 /**
- * One-time cleanup: remove the original demo/seed data (see db/seed.js) now
- * that real usage has started.
+ * Two one-time actions, both meant to be run once and then removed:
  *
- * Deliberately narrow rather than a general "delete anything" tool: the only
- * task ids this can ever touch are the ones seed.js created, and each one is
- * checked against exactly what the seed script put there — name and client —
- * before it is deleted. If either has changed since seeding, that row is left
- * alone rather than guessed at, because somebody may have renamed or
- * repurposed it into real work. This whole file is meant to be removed again
- * once it has been run.
+ *   1. purge-seed-data — remove the original demo/seed data (see db/seed.js)
+ *      now that real usage has started.
+ *   2. create-superadmin — bootstrap the very first Super Admin account.
+ *      Needed because appointing a Super Admin normally requires already
+ *      being one (see access.js's APPOINTERS) — the first one has to come
+ *      from somewhere, and this is that somewhere, gated the same as
+ *      everything else here (an existing Manager or Super Admin only).
  */
 import { Router } from 'express';
-import { db } from '../db/index.js';
+import bcrypt from 'bcryptjs';
+import crypto from 'node:crypto';
+import { db, nowSql } from '../db/index.js';
 import { requireAuth, requirePermission } from '../middleware/auth.js';
 import { wrap } from '../lib/validate.js';
 
@@ -88,6 +89,33 @@ router.post(
     }
 
     res.json({ deleted, skipped, chatCleared, chatCountBefore });
+  })
+);
+
+router.post(
+  '/create-superadmin',
+  wrap(async (req, res) => {
+    const name = 'Sohail Memon';
+    const email = 'sohail@cloudmojo.tech';
+    const tempPassword = crypto.randomBytes(9).toString('base64url'); // 12 chars, URL-safe
+    const hash = bcrypt.hashSync(tempPassword, 10);
+
+    const existing = await db.prepare('SELECT id FROM users WHERE lower(email) = lower(?)').get(email);
+    if (existing) {
+      await db
+        .prepare('UPDATE users SET role = ?, password_hash = ?, updated_at = ? WHERE id = ?')
+        .run('superadmin', hash, nowSql(), existing.id);
+      return res.json({ action: 'updated', id: existing.id, email, tempPassword });
+    }
+
+    const stamp = nowSql();
+    const info = await db
+      .prepare(
+        `INSERT INTO users (name, email, password_hash, role, team, title, created_at, updated_at)
+         VALUES (?,?,?,?,?,?,?,?)`
+      )
+      .run(name, email, hash, 'superadmin', 'Operations', 'Super Admin', stamp, stamp);
+    res.json({ action: 'created', id: info.lastInsertRowid, email, tempPassword });
   })
 );
 

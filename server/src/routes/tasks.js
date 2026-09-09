@@ -922,4 +922,22 @@ router.post(
   )
 );
 
+/**
+ * Permanently remove a task. Separate from Cancel above: cancelling keeps the
+ * whole record and says why; this erases it — steps, history, attachments and
+ * notifications included, since schema.sql marks every one of those
+ * `ON DELETE CASCADE` from a task on purpose. There is no undo once this
+ * returns, which is exactly the difference from Cancel.
+ */
+router.delete(
+  '/:id',
+  requirePermission('tasks.delete'),
+  wrap(async (req, res) => {
+    const t = await load(req.params.id);
+    if (!t) return res.status(404).json({ error: 'Task not found' });
+    await db.prepare('DELETE FROM tasks WHERE id = ?').run(t.id);
+    res.json({ ok: true });
+  })
+);
+
 export default router;
