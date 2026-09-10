@@ -40,6 +40,12 @@ export default function Layout({ title, subtitle, actions, children }) {
   const [store, setStore] = useState(null);
   const [theme, setTheme] = useState(getTheme());
   const [rail, setRail] = useState(() => storage.get(RAIL_KEY) === 'collapsed');
+  // The sidebar becomes an off-canvas drawer below the mobile breakpoint (see
+  // styles.css) — this is that drawer's open/closed state. Unrelated to
+  // `rail`, which is the desktop icon-only collapse and only applies above
+  // that breakpoint.
+  const [navOpen, setNavOpen] = useState(false);
+  const closeNav = () => setNavOpen(false);
 
   // The bell keeps its own counts and its own polling — see Alerts.jsx. What is
   // left here is the two numbers the sidebar shows.
@@ -63,6 +69,14 @@ export default function Layout({ title, subtitle, actions, children }) {
     return () => clearInterval(id);
   }, []);
 
+  // While the mobile drawer is open, the page behind it should not scroll.
+  useEffect(() => {
+    document.body.style.overflow = navOpen ? 'hidden' : '';
+    return () => {
+      document.body.style.overflow = '';
+    };
+  }, [navOpen]);
+
   const toggleRail = () => {
     const next = !rail;
     setRail(next);
@@ -77,7 +91,10 @@ export default function Layout({ title, subtitle, actions, children }) {
 
   return (
     <div className={`app${rail ? ' rail' : ''}`}>
-      <aside className="sidebar">
+      {/* Below the mobile breakpoint the sidebar is an off-canvas drawer —
+          this dims and closes it when somebody taps outside it. */}
+      {navOpen && <div className="nav-scrim" onClick={closeNav} />}
+      <aside className={`sidebar${navOpen ? ' nav-open' : ''}`}>
         {/* A1K is the platform, Task Tracker is the solution — so the lockup
             carries both, once. Collapsed, the logo alone stands in. */}
         <div className="brand">{rail ? <BrandMark size={18} theme={theme} /> : <BrandLockup theme={theme} />}</div>
@@ -94,6 +111,7 @@ export default function Layout({ title, subtitle, actions, children }) {
             end={n.to === '/'}
             title={rail ? n.label : undefined}
             className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}
+            onClick={closeNav}
           >
             {/* Collapsed, the count rides on the icon as a pip rather than
                 sitting in the row — a badge with `margin-left: auto` pushed the
@@ -123,6 +141,7 @@ export default function Layout({ title, subtitle, actions, children }) {
           to="/settings"
           title={rail ? 'Settings' : undefined}
           className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}
+          onClick={closeNav}
         >
           <span className="nav-icon" aria-hidden="true">
             ⚙
@@ -160,6 +179,15 @@ export default function Layout({ title, subtitle, actions, children }) {
 
       <div className="main">
         <header className="topbar">
+          {/* Only visible below the mobile breakpoint — the sidebar itself is
+              off-canvas there, so this is the only way back into it. */}
+          <button
+            className="hamburger"
+            onClick={() => setNavOpen((o) => !o)}
+            aria-label={navOpen ? 'Close menu' : 'Open menu'}
+          >
+            <span aria-hidden="true">☰</span>
+          </button>
           <div className="topbar-title">
             <h1>{title}</h1>
             {subtitle && <div className="sub">{subtitle}</div>}
