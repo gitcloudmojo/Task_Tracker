@@ -368,7 +368,7 @@ router.patch(
     let reassignment = null;
 
     const notesOnly = Object.keys(req.body).every((k) => k === 'notes');
-    if (!a.canEdit && !(notesOnly && existing.owner_id === req.user.id)) {
+    if (!a.canEdit && !a.canEditOwn && !(notesOnly && existing.owner_id === req.user.id)) {
       return res.status(403).json({ error: 'You cannot change that task' });
     }
 
@@ -377,7 +377,7 @@ router.patch(
       params.push(req.body.notes ? String(req.body.notes).trim() : null);
     }
 
-    if (a.canEdit) {
+    if (a.canEdit || a.canEditOwn) {
       if (req.body.name !== undefined) {
         const name = String(req.body.name).trim();
         if (name.length < 3) bad('Give the task a name somebody will recognise later');

@@ -22,6 +22,7 @@ import { useAuth } from '../lib/auth.jsx';
 import Layout from '../components/Layout.jsx';
 import TaskRow from '../components/TaskRow.jsx';
 import TaskModal from '../components/TaskModal.jsx';
+import ImportTasksModal from '../components/ImportTasksModal.jsx';
 import { Card, Empty, ErrorBanner } from '../components/ui.jsx';
 import MySteps from '../components/MySteps.jsx';
 
@@ -36,10 +37,14 @@ export default function Home() {
   const [error, setError] = useState(null);
   const [tab, setTab] = useState(null);
   // Team members reach this page and no other, since /tasks is behind
-  // tasks.view_all — so this is where the "+ New task" button has to live for
-  // somebody who can only ever create a task for themselves.
+  // tasks.view_all — so this is where the "+ New task" and "Import from
+  // Excel" buttons have to live for somebody who can only ever create (or
+  // bulk-import) a task for themselves. The import route enforces the same
+  // "yourself only" rule server-side, so this button never needs to know
+  // which permission got them here.
   const canCreate = can('tasks.create') || can('tasks.create_own');
   const [creating, setCreating] = useState(false);
+  const [importing, setImporting] = useState(false);
 
   const load = () => {
     api.get('/tasks/queue').then(setQueue).catch(setError);
@@ -205,9 +210,14 @@ export default function Home() {
       subtitle={line()}
       actions={
         canCreate && (
-          <button className="btn primary" onClick={() => setCreating(true)}>
-            + New task
-          </button>
+          <>
+            <button className="btn ghost" onClick={() => setImporting(true)}>
+              Import from Excel
+            </button>
+            <button className="btn primary" onClick={() => setCreating(true)}>
+              + New task
+            </button>
+          </>
         )
       }
     >
@@ -349,6 +359,10 @@ export default function Home() {
 
       {creating && (
         <TaskModal people={people} clients={clients} onClose={() => setCreating(false)} onSaved={load} />
+      )}
+
+      {importing && (
+        <ImportTasksModal onClose={() => setImporting(false)} onImported={load} />
       )}
     </Layout>
   );

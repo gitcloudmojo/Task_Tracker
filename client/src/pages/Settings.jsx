@@ -6,21 +6,25 @@ import { Card, Field, ErrorBanner } from '../components/ui.jsx';
 
 /**
  * Everybody gets this, not just whoever can import — the point of the sheet
- * is that a person with no "assign tasks" rights of their own can still fill
- * it in and hand it to their manager, who compiles everyone's rows and does
- * the one import. So this card has no permission check.
+ * is that even somebody who can only import for themselves (or, for the CEO,
+ * not at all) can still fill it in. So this card has no permission check of
+ * its own; the three-way copy below is the only thing that changes by role.
  */
 function BulkSheetCard({ can, onError }) {
   const download = () =>
     api.download('/task-import/template', 'task-import-template.xlsx').catch(onError);
 
+  const copy = can('tasks.create')
+    ? 'Download the sheet, fill in a row per task, and import the compiled file to create them all at once — see the "Import from Excel" button on the All tasks page.'
+    : can('tasks.create_own')
+      ? 'Download the sheet and fill in a row per task for yourself, then import it from the "Import from Excel" button on your Home page — every row imports as yours.'
+      : 'Download the sheet and fill in a row per task you need created. Save it and pass it to your manager — they compile everyone’s sheet and import it, so nothing here needs your manager’s software access from you.';
+
   return (
-    <Card title="Bulk task sheet" hint="fill it in, then hand it over or import it">
+    <Card title="Bulk task sheet" hint="fill it in, then import it or hand it over">
       <div className="stack" style={{ gap: 10 }}>
         <div className="small" style={{ color: 'var(--ink-secondary)', lineHeight: 1.7 }}>
-          {can('tasks.create')
-            ? 'Download the sheet, fill in a row per task, and import the compiled file to create them all at once — see the "Import from Excel" button on the All tasks page.'
-            : 'Download the sheet and fill in a row per task you need created. Save it and pass it to your manager — they compile everyone’s sheet and import it, so nothing here needs your manager’s software access from you.'}
+          {copy}
         </div>
         <div>
           <button className="btn" onClick={download}>

@@ -8,10 +8,16 @@
  */
 import { useRef, useState } from 'react';
 import { api } from '../lib/api.js';
+import { useAuth } from '../lib/auth.jsx';
 import { Modal, ErrorBanner, Badge } from './ui.jsx';
 import { fileSize } from '../lib/task.js';
 
 export default function ImportTasksModal({ onClose, onImported }) {
+  const { can } = useAuth();
+  // Same split as everywhere else: `tasks.create` may import for anyone,
+  // `tasks.create_own` only for the importer themselves — enforced on the
+  // server per row, this just sets the right expectation up front.
+  const selfOnly = !can('tasks.create');
   const [file, setFile] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
@@ -82,6 +88,7 @@ export default function ImportTasksModal({ onClose, onImported }) {
               Need the sheet? <button className="btn sm ghost" onClick={downloadTemplate}>Download the template</button>{' '}
               — one row per task, one owner per row. Sub-tasks aren't part of the sheet; whoever ends
               up owning a task adds those afterwards.
+              {selfOnly && ' Every row here imports as yours — leave "Assign to" blank or use your own email.'}
             </div>
 
             <label

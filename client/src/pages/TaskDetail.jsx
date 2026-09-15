@@ -204,7 +204,7 @@ export default function TaskDetail() {
               Reassign
             </button>
           )}
-          {t.canEdit && (
+          {(t.canEdit || t.canEditOwn) && (
             <button className="btn ghost" onClick={() => setEditing(true)}>
               Edit
             </button>

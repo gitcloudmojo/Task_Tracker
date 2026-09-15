@@ -27,10 +27,11 @@ import { Router } from 'express';
 import multer from 'multer';
 import ExcelJS from 'exceljs';
 import { db, nowSql, today } from '../db/index.js';
-import { requireAuth, requirePermission } from '../middleware/auth.js';
+import { requireAuth, requireAnyPermission } from '../middleware/auth.js';
 import { wrap } from '../lib/validate.js';
 import { record } from '../services/workflow.js';
 import { notifyTask } from '../services/alerts.js';
+import { can } from '../access.js';
 import { PRIORITIES } from './tasks.js';
 
 const router = Router();
@@ -119,6 +120,8 @@ router.get(
       '4. "Priority" is optional — leave it blank for Normal, or pick High.',
       '5. Only the task itself goes in this sheet. Once it is imported, its breakdown (steps/follow-ups) is added by whoever now owns it, from that task’s own page.',
       '',
+      'If you can only assign tasks to yourself: leave "Assign to" blank, or use your own email — every row imports as yours. A row naming somebody else is held, not reassigned.',
+      '',
       'If you are filling this in for yourself rather than importing it: save the file and hand it to your manager. They import the compiled sheet — this file never has to touch the software for that to work.',
       '',
       'After import, anything that could not be created is reported back with the reason — fix it in the sheet and import just those rows again if you like.',
@@ -176,7 +179,10 @@ const upload = multer({
 
 router.post(
   '/',
-  requirePermission('tasks.create'),
+  // Same split as single-task creation: `tasks.create` may import for anyone,
+  // `tasks.create_own` (a team member) may only ever import rows for
+  // themselves — enforced per-row below, not by refusing the route.
+  requireAnyPermission('tasks.create', 'tasks.create_own'),
   (req, res, next) =>
     upload.single('file')(req, res, (err) => {
       if (!err) return next();
@@ -205,6 +211,12 @@ router.post(
     // anything cheap enough to always do.
     const activeUsers = await db.prepare('SELECT id, name, email FROM users WHERE is_active = 1').all();
     const byEmail = new Map(activeUsers.map((u) => [u.email.toLowerCase(), u]));
+
+    // A team member holds `tasks.create_own`, not `tasks.create` — the same
+    // split as the single-task route. They may still import a batch, but
+    // every row in it has to end up owned by them; the "Assign to" column is
+    // read only to *check* that, never to hand a row to somebody else.
+    const selfOnly = !can(req.user, 'tasks.create');
 
     const rawRows = [];
     ws.eachRow({ includeEmpty: false }, (row, rowNumber) => {
@@ -245,15 +257,29 @@ router.post(
         failHere('Client is required');
         continue;
       }
-      if (!email) {
-        failHere('"Assign to" email is required');
-        continue;
+
+      let owner;
+      if (selfOnly) {
+        // Blank or their own email both mean "me" — a name that resolves to
+        // somebody else is the one thing this importer is not allowed to do,
+        // so that row is held rather than quietly reassigned or dropped.
+        if (email && email.toLowerCase() !== req.user.email.toLowerCase()) {
+          failHere('You can only import tasks for yourself — this row names someone else');
+          continue;
+        }
+        owner = { id: req.user.id, name: req.user.name };
+      } else {
+        if (!email) {
+          failHere('"Assign to" email is required');
+          continue;
+        }
+        owner = byEmail.get(email.toLowerCase());
+        if (!owner) {
+          failHere(`No active person with the email "${email}"`);
+          continue;
+        }
       }
-      const owner = byEmail.get(email.toLowerCase());
-      if (!owner) {
-        failHere(`No active person with the email "${email}"`);
-        continue;
-      }
+
       const completionDate = parseDueDate(dueRaw);
       if (!completionDate) {
         failHere('Due date must be in YYYY-MM-DD form');

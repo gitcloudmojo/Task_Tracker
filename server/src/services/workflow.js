@@ -90,6 +90,7 @@ export async function verifyCompletesTask(task) {
  */
 export async function actionsFor(task, user, can) {
   const isOwner = task.owner_id === user.id;
+  const isCreator = task.created_by === user.id;
   const live = isLive(task);
   const [verifyOk, approveOk] = await Promise.all([
     task.status === 'submitted' ? canCheck(task, user, can) : Promise.resolve(false),
@@ -105,6 +106,12 @@ export async function actionsFor(task, user, can) {
     canApprove: approveOk,
     canReturn: returnOk,
     canEdit: live && can(user, 'tasks.edit'),
+    // A team member holds no general `tasks.edit`, but a task they both own
+    // *and* created — one they made for themselves, via `tasks.create_own` —
+    // is theirs to fix a typo or push the date on. This never reaches to a
+    // task somebody else assigned them: `isCreator` is what keeps the two
+    // apart, and it never grants reassignment (that stays `tasks.assign`).
+    canEditOwn: live && !can(user, 'tasks.edit') && isOwner && isCreator && can(user, 'tasks.create_own'),
     canReassign: live && can(user, 'tasks.assign'),
     canCancel: live && can(user, 'tasks.cancel'),
     canReopen: task.status === 'approved' && can(user, 'tasks.reopen'),
