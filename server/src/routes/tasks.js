@@ -43,7 +43,7 @@ import {
 const router = Router();
 router.use(requireAuth);
 
-const PRIORITIES = ['high', 'normal'];
+export const PRIORITIES = ['high', 'normal'];
 
 const SELECT = `
   SELECT t.*,

@@ -4,6 +4,34 @@ import { useAuth } from '../lib/auth.jsx';
 import Layout from '../components/Layout.jsx';
 import { Card, Field, ErrorBanner } from '../components/ui.jsx';
 
+/**
+ * Everybody gets this, not just whoever can import — the point of the sheet
+ * is that a person with no "assign tasks" rights of their own can still fill
+ * it in and hand it to their manager, who compiles everyone's rows and does
+ * the one import. So this card has no permission check.
+ */
+function BulkSheetCard({ can, onError }) {
+  const download = () =>
+    api.download('/task-import/template', 'task-import-template.xlsx').catch(onError);
+
+  return (
+    <Card title="Bulk task sheet" hint="fill it in, then hand it over or import it">
+      <div className="stack" style={{ gap: 10 }}>
+        <div className="small" style={{ color: 'var(--ink-secondary)', lineHeight: 1.7 }}>
+          {can('tasks.create')
+            ? 'Download the sheet, fill in a row per task, and import the compiled file to create them all at once — see the "Import from Excel" button on the All tasks page.'
+            : 'Download the sheet and fill in a row per task you need created. Save it and pass it to your manager — they compile everyone’s sheet and import it, so nothing here needs your manager’s software access from you.'}
+        </div>
+        <div>
+          <button className="btn" onClick={download}>
+            Download the template
+          </button>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
 /** Where the data lives, in one card. */
 function StoreCard({ store }) {
   const workbook = store.mode === 'workbook';
@@ -94,7 +122,7 @@ function StoreCard({ store }) {
 }
 
 export default function Settings() {
-  const { user, setUser } = useAuth();
+  const { user, setUser, can } = useAuth();
   const [name, setName] = useState(user.name);
   const [days, setDays] = useState(String(user.reminderDaysBefore));
   const [currentPassword, setCurrentPassword] = useState('');
@@ -141,6 +169,8 @@ export default function Settings() {
         {saved && <div className="notice">{saved}</div>}
 
         {store && <StoreCard store={store} />}
+
+        <BulkSheetCard can={can} onError={setError} />
 
         <Card title="Profile">
           <div className="stack" style={{ gap: 14 }}>

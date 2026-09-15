@@ -14,6 +14,7 @@ import { useAuth } from '../lib/auth.jsx';
 import Layout from '../components/Layout.jsx';
 import TaskRow from '../components/TaskRow.jsx';
 import TaskModal from '../components/TaskModal.jsx';
+import ImportTasksModal from '../components/ImportTasksModal.jsx';
 import { Card, Empty, ErrorBanner, Badge, Segmented, StageBar } from '../components/ui.jsx';
 
 const VIEWS = [
@@ -40,6 +41,7 @@ export default function Tasks() {
   const [clients, setClients] = useState([]);
   const [error, setError] = useState(null);
   const [creating, setCreating] = useState(false);
+  const [importing, setImporting] = useState(false);
   const [group, setGroup] = useState('byPerson');
 
   const [view, setView] = useState(params.get('view') || 'live');
@@ -98,9 +100,14 @@ export default function Tasks() {
       }
       actions={
         can('tasks.create') && (
-          <button className="btn primary" onClick={() => setCreating(true)}>
-            + New task
-          </button>
+          <>
+            <button className="btn ghost" onClick={() => setImporting(true)}>
+              Import from Excel
+            </button>
+            <button className="btn primary" onClick={() => setCreating(true)}>
+              + New task
+            </button>
+          </>
         )
       }
     >
@@ -232,6 +239,10 @@ export default function Tasks() {
 
       {creating && (
         <TaskModal people={people} clients={clients} onClose={() => setCreating(false)} onSaved={load} />
+      )}
+
+      {importing && (
+        <ImportTasksModal onClose={() => setImporting(false)} onImported={load} />
       )}
     </Layout>
   );

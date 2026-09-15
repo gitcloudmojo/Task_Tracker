@@ -71,6 +71,27 @@ export const api = {
   },
 
   /**
+   * A single-file upload. Kept separate from `upload` above: that one appends
+   * every file under the field name `files` because a task or a chat message
+   * can carry several attachments at once, but a bulk-import batch is exactly
+   * one workbook, and the server route for it expects that one file under the
+   * field name `file`.
+   */
+  async uploadOne(path, file) {
+    const form = new FormData();
+    form.append('file', file);
+    const res = await fetch(`/api${path}`, {
+      method: 'POST',
+      headers: { ...(getToken() ? { Authorization: `Bearer ${getToken()}` } : {}) },
+      body: form,
+    });
+    const text = await res.text();
+    const data = text ? JSON.parse(text) : {};
+    if (!res.ok) throw new Error(data.error || `Upload failed (${res.status})`);
+    return data;
+  },
+
+  /**
    * Downloads go through fetch rather than a plain link, because the file is
    * behind the same auth as everything else and a bare href carries no token.
    */
