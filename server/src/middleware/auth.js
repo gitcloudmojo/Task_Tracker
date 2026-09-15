@@ -41,3 +41,17 @@ export const requirePermission = (permission) => (req, res, next) => {
     permission,
   });
 };
+
+/**
+ * Guard a route on any one of several permissions — for a route that more
+ * than one role may enter, each for its own reason (e.g. task creation: a
+ * Manager may create for anyone, a team member only for themselves — the
+ * *narrower* check, which permission that was, happens inside the handler).
+ */
+export const requireAnyPermission = (...permissions) => (req, res, next) => {
+  if (permissions.some((p) => can(req.user, p))) return next();
+  return res.status(403).json({
+    error: `Your role does not have permission for this.`,
+    permission: permissions[0],
+  });
+};

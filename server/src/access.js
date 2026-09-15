@@ -75,7 +75,12 @@ const GRANTS = {
     'reports.view',
     'projects.view',
   ],
-  user: ['tasks.view_own', 'team.view'],
+  // A team member may create a task, but only for themselves — see the
+  // ownerId check next to `tasks.create_own`'s one use, in the task-creation
+  // route. `tasks.create` (above) still means "for anyone"; this is
+  // deliberately a separate, narrower permission rather than a flag on the
+  // same one, so the two can never be confused at a call site.
+  user: ['tasks.view_own', 'tasks.create_own', 'team.view'],
 };
 
 export const ALL_PERMISSIONS = [...new Set(Object.values(GRANTS).flat())].sort();

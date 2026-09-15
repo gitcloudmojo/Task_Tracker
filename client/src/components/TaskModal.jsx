@@ -7,16 +7,22 @@
  */
 import { useEffect, useState } from 'react';
 import { api } from '../lib/api.js';
+import { useAuth } from '../lib/auth.jsx';
 import { Modal, Field, ErrorBanner, Segmented } from './ui.jsx';
 import FilePicker from './FilePicker.jsx';
 
 const today = () => new Date().toISOString().slice(0, 10);
 
 export default function TaskModal({ task, people, clients, onClose, onSaved }) {
+  const { user, can } = useAuth();
+  // `tasks.create` is "for anyone" (Manager, Super Admin); a team member holds
+  // only `tasks.create_own` and never sees the owner picker at all — there is
+  // nothing to choose, so nothing to get wrong.
+  const assignOthers = can('tasks.create');
   const editing = Boolean(task);
   const [name, setName] = useState(task?.name || '');
   const [clientName, setClientName] = useState(task?.clientName || '');
-  const [ownerId, setOwnerId] = useState(task?.ownerId || '');
+  const [ownerId, setOwnerId] = useState(task?.ownerId || (assignOthers ? '' : user.id));
   const [completionDate, setCompletionDate] = useState(task?.completionDate || '');
   const [priority, setPriority] = useState(task?.priority || 'normal');
   const [notes, setNotes] = useState(task?.notes || '');
@@ -121,18 +127,25 @@ export default function TaskModal({ task, people, clients, onClose, onSaved }) {
             </datalist>
           </Field>
 
-          <Field label="Task owner *" help="The person who does the work and submits it.">
-            <select value={ownerId} onChange={(e) => setOwnerId(e.target.value)}>
-              <option value="">— choose —</option>
-              {(people || [])
-                .filter((p) => p.isActive)
-                .map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                    {p.team ? ` — ${p.team}` : ''}
-                  </option>
-                ))}
-            </select>
+          <Field
+            label="Task owner *"
+            help={assignOthers ? 'The person who does the work and submits it.' : 'You can only create tasks for yourself.'}
+          >
+            {assignOthers ? (
+              <select value={ownerId} onChange={(e) => setOwnerId(e.target.value)}>
+                <option value="">— choose —</option>
+                {(people || [])
+                  .filter((p) => p.isActive)
+                  .map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                      {p.team ? ` — ${p.team}` : ''}
+                    </option>
+                  ))}
+              </select>
+            ) : (
+              <input type="text" value={`${user.name} (you)`} disabled />
+            )}
           </Field>
 
           <Field label="Completion date *" help="The target for delivery. Alerts key off this.">
@@ -175,10 +188,16 @@ export default function TaskModal({ task, people, clients, onClose, onSaved }) {
           <FilePicker files={files} onChange={setFiles} label="Attach files to this task" />
         </Field>
 
-        {!editing && (
+        {!editing && assignOthers && (
           <div className="notice">
             The owner gets an alert straight away. They submit it when done, an admin verifies it,
             and the CEO gives the final approval.
+          </div>
+        )}
+        {!editing && !assignOthers && (
+          <div className="notice">
+            Submit it when it's done — your manager checks it, and the CEO gives the final
+            approval.
           </div>
         )}
       </div>

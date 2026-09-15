@@ -21,6 +21,7 @@ import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
 import Layout from '../components/Layout.jsx';
 import TaskRow from '../components/TaskRow.jsx';
+import TaskModal from '../components/TaskModal.jsx';
 import { Card, Empty, ErrorBanner } from '../components/ui.jsx';
 import MySteps from '../components/MySteps.jsx';
 
@@ -30,8 +31,15 @@ export default function Home() {
   const [dash, setDash] = useState(null);
   const [mine, setMine] = useState([]);
   const [steps, setSteps] = useState([]);
+  const [people, setPeople] = useState([]);
+  const [clients, setClients] = useState([]);
   const [error, setError] = useState(null);
   const [tab, setTab] = useState(null);
+  // Team members reach this page and no other, since /tasks is behind
+  // tasks.view_all — so this is where the "+ New task" button has to live for
+  // somebody who can only ever create a task for themselves.
+  const canCreate = can('tasks.create') || can('tasks.create_own');
+  const [creating, setCreating] = useState(false);
 
   const load = () => {
     api.get('/tasks/queue').then(setQueue).catch(setError);
@@ -43,6 +51,13 @@ export default function Home() {
       .get('/tasks?mine=true&limit=200')
       .then((d) => setMine(d.tasks))
       .catch(() => {});
+    if (canCreate) {
+      // Only needed for the create modal — a team member never sees the
+      // owner picker it would feed, but a Manager or Super Admin landing on
+      // Home still gets the full list.
+      api.get('/users').then((d) => setPeople(d.users)).catch(() => {});
+      api.get('/tasks/clients').then((d) => setClients(d.clients)).catch(() => {});
+    }
   };
 
   useEffect(load, []);
@@ -185,7 +200,17 @@ export default function Home() {
   };
 
   return (
-    <Layout title={`Good day, ${firstName}`} subtitle={line()}>
+    <Layout
+      title={`Good day, ${firstName}`}
+      subtitle={line()}
+      actions={
+        canCreate && (
+          <button className="btn primary" onClick={() => setCreating(true)}>
+            + New task
+          </button>
+        )
+      }
+    >
       <div className="stack">
         <ErrorBanner error={error} />
 
@@ -321,6 +346,10 @@ export default function Home() {
           </div>
         )}
       </div>
+
+      {creating && (
+        <TaskModal people={people} clients={clients} onClose={() => setCreating(false)} onSaved={load} />
+      )}
     </Layout>
   );
 }

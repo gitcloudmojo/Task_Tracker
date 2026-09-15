@@ -11,7 +11,7 @@
  */
 import { Router } from 'express';
 import { db, nowSql, today, withTransaction } from '../db/index.js';
-import { requireAuth, requirePermission } from '../middleware/auth.js';
+import { requireAuth, requirePermission, requireAnyPermission } from '../middleware/auth.js';
 import { wrap, requireFields, oneOf, isoDate, bad } from '../lib/validate.js';
 import { can, taskScope, canViewTask, ownsStepOf, ownOnly } from '../access.js';
 import {
@@ -280,7 +280,11 @@ router.get(
 
 router.post(
   '/',
-  requirePermission('tasks.create'),
+  // Two different rights land on the same route: `tasks.create` (Manager,
+  // Super Admin) may assign to anyone, `tasks.create_own` (team member) may
+  // only ever name themselves. The gate below just lets either of them in —
+  // which one, and what that means for the ownerId, is decided just after.
+  requireAnyPermission('tasks.create', 'tasks.create_own'),
   wrap(async (req, res) => {
     requireFields(req.body, ['name', 'clientName', 'ownerId', 'completionDate']);
     oneOf(req.body.priority, PRIORITIES, 'priority');
@@ -289,6 +293,10 @@ router.post(
       .prepare('SELECT id, name FROM users WHERE id = ? AND is_active = 1')
       .get(req.body.ownerId);
     if (!owner) return res.status(400).json({ error: 'Pick an active person to own this' });
+
+    if (!can(req.user, 'tasks.create') && owner.id !== req.user.id) {
+      return res.status(403).json({ error: 'You can only create a task for yourself.' });
+    }
 
     const completionDate = isoDate(req.body.completionDate, 'completionDate');
     if (completionDate < today()) bad('The completion date cannot be in the past');

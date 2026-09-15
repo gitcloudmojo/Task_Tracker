@@ -99,16 +99,18 @@ export default function Tasks() {
           : undefined
       }
       actions={
-        can('tasks.create') && (
-          <>
+        <>
+          {can('tasks.create') && (
             <button className="btn ghost" onClick={() => setImporting(true)}>
               Import from Excel
             </button>
+          )}
+          {(can('tasks.create') || can('tasks.create_own')) && (
             <button className="btn primary" onClick={() => setCreating(true)}>
               + New task
             </button>
-          </>
-        )
+          )}
+        </>
       }
     >
       <div className="stack">
