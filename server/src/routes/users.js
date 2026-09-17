@@ -199,6 +199,16 @@ router.patch(
     }
     const newPassword = req.body.newPassword ?? req.body.password;
     if (newPassword !== undefined) {
+      // Separate from the `team.manage` gate on this whole route: a Manager
+      // holds `team.manage` too, but resetting somebody else's password is a
+      // narrower, more sensitive act (it gets you into their account without
+      // them), so it needs its own permission, held only by Super Admin.
+      if (!can(req.user, 'users.reset_password')) {
+        return res.status(403).json({ error: 'Only a Super Admin can reset a password here.' });
+      }
+      if (target.id === req.user.id) {
+        return res.status(400).json({ error: 'Change your own password from Settings, not here.' });
+      }
       if (String(newPassword).length < 8) bad('A password needs at least 8 characters');
       sets.push('password_hash = ?');
       params.push(bcrypt.hashSync(String(newPassword), 10));

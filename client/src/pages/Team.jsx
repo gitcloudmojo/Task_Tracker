@@ -30,6 +30,9 @@ export default function Team() {
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [filter, setFilter] = useState('active');
+  const [resetPwd, setResetPwd] = useState('');
+  const [resetting, setResetting] = useState(false);
+  const [resetDone, setResetDone] = useState(null);
 
   const load = () =>
     api
@@ -96,6 +99,32 @@ export default function Team() {
       setError(err);
     } finally {
       setDeleting(false);
+    }
+  };
+
+  const closeModal = () => {
+    setAdding(false);
+    setEditing(null);
+    setResetPwd('');
+    setResetDone(null);
+  };
+
+  // Separate from `save()` on purpose: this is its own action with its own
+  // permission (`users.reset_password`, Super Admin only, enforced again on
+  // the server), not one more field on the regular profile-edit form — it
+  // takes effect immediately rather than waiting on "Save changes".
+  const resetPassword = async () => {
+    setResetting(true);
+    setError(null);
+    setResetDone(null);
+    try {
+      await api.patch(`/users/${editing.id}`, { newPassword: resetPwd });
+      setResetPwd('');
+      setResetDone(`Password reset. Share the new one with ${editing.name} directly — they can change it again in Settings.`);
+    } catch (err) {
+      setError(err);
+    } finally {
+      setResetting(false);
     }
   };
 
@@ -205,6 +234,8 @@ export default function Team() {
                                   team: u.team || '',
                                   title: u.title || '',
                                 });
+                                setResetPwd('');
+                                setResetDone(null);
                               }}
                             >
                               Edit
@@ -264,10 +295,7 @@ export default function Team() {
       {(adding || editing) && (
         <Modal
           title={editing ? `Edit ${editing.name}` : 'Add a person'}
-          onClose={() => {
-            setAdding(false);
-            setEditing(null);
-          }}
+          onClose={closeModal}
           wide
           footer={
             <>
@@ -281,14 +309,7 @@ export default function Team() {
                   {deleting ? 'Deleting…' : 'Delete permanently'}
                 </button>
               )}
-              <button
-                className="btn"
-                onClick={() => {
-                  setAdding(false);
-                  setEditing(null);
-                }}
-                disabled={saving || deleting}
-              >
+              <button className="btn" onClick={closeModal} disabled={saving || deleting}>
                 Cancel
               </button>
               <button className="btn primary" onClick={save} disabled={saving || deleting || !ready}>
@@ -347,6 +368,37 @@ export default function Team() {
                 Super Admin can permanently delete people and tasks — there is no undo. Reserve this
                 for the one account that should hold it.
               </div>
+            )}
+
+            {editing && can('users.reset_password') && editing.id !== user.id && (
+              <Card title="Reset password" hint="Super Admin only">
+                <div className="stack" style={{ gap: 10 }}>
+                  <div className="small muted" style={{ lineHeight: 1.6 }}>
+                    Sets a new temporary password immediately — {editing.name} does not need to know
+                    their old one. This takes effect right away, separately from "Save changes" above.
+                    They can change it again themselves in Settings.
+                  </div>
+                  <div className="row" style={{ gap: 8 }}>
+                    <input
+                      type="password"
+                      placeholder="New temporary password"
+                      value={resetPwd}
+                      onChange={(e) => setResetPwd(e.target.value)}
+                      style={{ flex: 1 }}
+                      autoComplete="new-password"
+                    />
+                    <button
+                      className="btn"
+                      onClick={resetPassword}
+                      disabled={resetPwd.length < 8 || resetting}
+                    >
+                      {resetting ? 'Resetting…' : 'Set password'}
+                    </button>
+                  </div>
+                  <div className="small muted">At least 8 characters.</div>
+                  {resetDone && <div className="notice">{resetDone}</div>}
+                </div>
+              </Card>
             )}
           </div>
         </Modal>

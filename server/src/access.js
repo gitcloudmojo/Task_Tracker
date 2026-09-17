@@ -48,6 +48,12 @@ const GRANTS = {
     'team.view',
     'team.manage',
     'users.delete',
+    // Deliberately held by Super Admin only — not by Manager, even though
+    // Manager also holds `team.manage`. Resetting somebody's password lets
+    // you into their account without their consent; that is a narrower,
+    // more sensitive power than the everyday people-management `team.manage`
+    // covers, so it gets its own permission rather than riding on that one.
+    'users.reset_password',
     'reports.view',
     'projects.view',
   ],
