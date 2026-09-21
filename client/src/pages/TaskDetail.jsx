@@ -21,9 +21,12 @@ import TaskModal from '../components/TaskModal.jsx';
 import ReassignModal from '../components/ReassignModal.jsx';
 import MoveButtons from '../components/MoveButtons.jsx';
 import StepList from '../components/StepList.jsx';
+import LabelPicker from '../components/LabelPicker.jsx';
 import { Card, Badge, Empty, ErrorBanner, ClipIcon } from '../components/ui.jsx';
 import { STATUS, PRIORITY, ACTION_LABEL, ACTION_ICON, fileSize, dueLabel } from '../lib/task.js';
 import { dateLabel, dateTimeLabel, relativeTime } from '../lib/format.js';
+
+const today = () => new Date().toISOString().slice(0, 10);
 
 /**
  * The four gates of the approval chain, as one line.
@@ -91,20 +94,52 @@ export default function TaskDetail() {
   const [reassigning, setReassigning] = useState(false);
   const [people, setPeople] = useState([]);
   const [clients, setClients] = useState([]);
-  const [notes, setNotes] = useState('');
-  const [savingNotes, setSavingNotes] = useState(false);
+  const [notesLog, setNotesLog] = useState([]);
+  const [newNote, setNewNote] = useState('');
+  const [newNoteDate, setNewNoteDate] = useState(today());
+  const [postingNote, setPostingNote] = useState(false);
+  const [savingLabel, setSavingLabel] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   const load = () =>
-    api
-      .get(`/tasks/${id}`)
-      .then((d) => {
+    Promise.all([api.get(`/tasks/${id}`), api.get(`/tasks/${id}/notes`)])
+      .then(([d, n]) => {
         setData(d);
-        setNotes(d.task.notes || '');
+        setNotesLog(n.notes);
       })
       .catch(setError);
+
+  const postNote = async () => {
+    const body = newNote.trim();
+    if (body.length < 2) return;
+    setPostingNote(true);
+    setError(null);
+    try {
+      await api.post(`/tasks/${id}/notes`, { body, entryDate: newNoteDate });
+      setNewNote('');
+      setNewNoteDate(today());
+      await load();
+    } catch (err) {
+      setError(err);
+    } finally {
+      setPostingNote(false);
+    }
+  };
+
+  const setLabel = async (labelId) => {
+    setSavingLabel(true);
+    setError(null);
+    try {
+      await api.patch(`/tasks/${id}`, { labelId });
+      await load();
+    } catch (err) {
+      setError(err);
+    } finally {
+      setSavingLabel(false);
+    }
+  };
 
   useEffect(() => {
     load();
@@ -176,9 +211,11 @@ export default function TaskDetail() {
 
   const t = data.task;
   const s = STATUS[t.status];
-  const due = dueLabel(t.daysToDue, t.status);
-  const notesChanged = (t.notes || '') !== notes;
-  const canEditNotes = t.mine || t.canEdit;
+  const due = dueLabel(t.daysToDue, t.status, t.lateSide);
+  // Done, but the delay now sits with whoever has not checked it yet — not
+  // with the owner. See dueLabel() in lib/task.js.
+  const doneAwaitingSignOff = t.isOverdue && t.lateSide && t.lateSide !== 'owner';
+  const manageLabels = can('labels.manage');
   // The bar also appears when there is no move to make *because* the breakdown
   // is holding it — that is when the reader most needs to be told why.
   const hasMove =
@@ -249,14 +286,16 @@ export default function TaskDetail() {
         )}
 
         {t.isOverdue && (
-          <div className="callout bad">
+          <div className={`callout ${doneAwaitingSignOff ? 'info' : 'bad'}`}>
             <div>
               <strong>{Math.abs(t.daysToDue)} days past the completion date.</strong>{' '}
               {t.status === 'open'
                 ? 'Still with the person doing it.'
-                : t.status === 'submitted'
-                  ? 'Marked done — waiting on the manager to check it.'
-                  : 'Checked — waiting on the CEO.'}
+                : // The owner already marked this done — the days past the
+                  // date belong to whoever has not checked it yet, not to
+                  // them, and the callout says so rather than reading like a
+                  // second complaint about the same lateness.
+                  'Marked done — the owner’s part is finished. Waiting on the check that signs it off.'}
             </div>
           </div>
         )}
@@ -268,10 +307,16 @@ export default function TaskDetail() {
               {s.label}
             </Badge>
             <span className="muted">{s.heldBy}</span>
+            {t.labelName && !manageLabels && <span className="flag-label">{t.labelName}</span>}
+            {manageLabels && (
+              <LabelPicker value={t.labelId} onChange={setLabel} disabled={savingLabel} />
+            )}
             <div className="spacer" />
             <span className="due-block">
               <span className="due-label">Complete by</span>
-              <span className={`due-date${t.isOverdue ? ' late' : ''}`}>
+              <span
+                className={`due-date${t.isOverdue ? (doneAwaitingSignOff ? ' pending' : ' late') : ''}`}
+              >
                 {dateLabel(t.completionDate)}
               </span>
               {due && <span className={`due ${due.tone}`}>{due.text}</span>}
@@ -290,7 +335,7 @@ export default function TaskDetail() {
               )}
               {t.canVerify && (
                 <span className="small muted">
-                  Confirming sends it up to the CEO for the final approval.
+                  Approving it here is the final sign-off — nothing else waits after this.
                 </span>
               )}
             </div>
@@ -310,7 +355,7 @@ export default function TaskDetail() {
               <b>Checked by</b> {t.verifierName}
             </span>
           )}
-          {t.approverName && (
+          {t.approverName && t.approverName !== t.verifierName && (
             <span>
               <b>Approved by</b> {t.approverName}
             </span>
@@ -387,41 +432,68 @@ export default function TaskDetail() {
           />
         </Card>
 
+        {/* Daily updates from whoever owns the task, and comments from
+            anyone else who can see it (a manager, or the CEO reviewing by
+            label) — one dated log rather than a field somebody overwrites.
+            Every entry keeps who wrote it, the day it is about, and — when
+            that differs — when it was actually posted. */}
         <Card
-          title="Notes"
-          hint={canEditNotes ? 'the owner keeps this current' : undefined}
-          action={
-            canEditNotes && notesChanged ? (
-              <button
-                className="btn sm primary"
-                disabled={savingNotes}
-                onClick={async () => {
-                  setSavingNotes(true);
-                  try {
-                    await api.patch(`/tasks/${id}`, { notes });
-                    await load();
-                  } catch (err) {
-                    setError(err);
-                  } finally {
-                    setSavingNotes(false);
-                  }
-                }}
-              >
-                {savingNotes ? 'Saving…' : 'Save notes'}
-              </button>
-            ) : null
-          }
+          title={`Updates${notesLog.length ? ` · ${notesLog.length}` : ''}`}
+          hint="dated automatically — move the date back to log a day you missed"
+          id="task-notes"
         >
-          {canEditNotes ? (
-            <textarea
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-              rows={4}
-              placeholder="Context, links, blockers, what done looks like."
-            />
-          ) : (
-            <div className="prose">{t.notes || <span className="muted">No notes.</span>}</div>
-          )}
+          <div className="stack" style={{ gap: 14 }}>
+            {notesLog.length === 0 ? (
+              <Empty>Nothing logged yet.</Empty>
+            ) : (
+              <div className="notes-log">
+                {notesLog.map((n) => {
+                  const postedSameDay = (n.createdAt || '').slice(0, 10) === n.entryDate;
+                  return (
+                    <div key={n.id} className="note-entry">
+                      <div className="note-head">
+                        <span className="strong">{n.authorName}</span>
+                        <span className="small muted">{n.authorRoleLabel}</span>
+                        <span className="small muted note-when">
+                          {dateLabel(n.entryDate)}
+                          {!postedSameDay && <> · logged {relativeTime(n.createdAt)}</>}
+                        </span>
+                      </div>
+                      <div className="note-body">{n.body}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            <div className="note-compose">
+              <textarea
+                value={newNote}
+                onChange={(e) => setNewNote(e.target.value)}
+                rows={3}
+                placeholder="What happened today — or a comment on this task."
+              />
+              <div className="note-compose-row">
+                <label className="note-date-field">
+                  <span className="small muted">For</span>
+                  <input
+                    type="date"
+                    value={newNoteDate}
+                    max={today()}
+                    onChange={(e) => setNewNoteDate(e.target.value)}
+                  />
+                </label>
+                <div className="spacer" />
+                <button
+                  className="btn sm primary"
+                  disabled={postingNote || newNote.trim().length < 2}
+                  onClick={postNote}
+                >
+                  {postingNote ? 'Posting…' : 'Add update'}
+                </button>
+              </div>
+            </div>
+          </div>
         </Card>
 
         <Card

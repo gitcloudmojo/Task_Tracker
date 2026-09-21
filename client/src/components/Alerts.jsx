@@ -33,6 +33,7 @@ const ICON = {
   task_cancelled: '⊘',
   review_stalled: '⚑',
   approval_stalled: '⚑',
+  task_commented: '✎',
   chat_message: '✉',
   // The breakdown. A follow-up gets the repeat mark rather than a clock,
   // because its day arriving is not the same as being late.

@@ -10,6 +10,7 @@ import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
 import { Modal, Field, ErrorBanner, Segmented } from './ui.jsx';
 import FilePicker from './FilePicker.jsx';
+import LabelPicker from './LabelPicker.jsx';
 
 const today = () => new Date().toISOString().slice(0, 10);
 
@@ -19,6 +20,7 @@ export default function TaskModal({ task, people, clients, onClose, onSaved }) {
   // only `tasks.create_own` and never sees the owner picker at all — there is
   // nothing to choose, so nothing to get wrong.
   const assignOthers = can('tasks.create');
+  const manageLabels = can('labels.manage');
   const editing = Boolean(task);
   const [name, setName] = useState(task?.name || '');
   const [clientName, setClientName] = useState(task?.clientName || '');
@@ -26,6 +28,7 @@ export default function TaskModal({ task, people, clients, onClose, onSaved }) {
   const [completionDate, setCompletionDate] = useState(task?.completionDate || '');
   const [priority, setPriority] = useState(task?.priority || 'normal');
   const [notes, setNotes] = useState(task?.notes || '');
+  const [labelId, setLabelId] = useState(task?.labelId || null);
   const [files, setFiles] = useState([]);
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -53,8 +56,16 @@ export default function TaskModal({ task, people, clients, onClose, onSaved }) {
         ownerId: Number(ownerId),
         completionDate,
         priority,
-        notes: notes.trim() || null,
       };
+      // Notes only apply at creation — after that, updates go on the task's
+      // dated log instead (see Task Detail), so an edit never sends this and
+      // there is nothing here that would silently overwrite what somebody
+      // logged there.
+      if (!editing) payload.notes = notes.trim() || null;
+      // Only a Manager or Super Admin sends this at all — the server refuses
+      // a `labelId` from anybody else on an edit, so a team member's own
+      // edit (`canEditOwn`) never carries it.
+      if (manageLabels) payload.labelId = labelId || null;
       // A task has no id until it exists, so files go up straight afterwards.
       // If that second step fails the task still stands — better a task with a
       // missing brief than no task at all — and the error says which happened.
@@ -167,19 +178,30 @@ export default function TaskModal({ task, people, clients, onClose, onSaved }) {
               ]}
             />
           </Field>
+
+          {manageLabels && (
+            <Field
+              label="Label"
+              help="The wider project this belongs to, if any — lets the CEO pull up every task under it, whoever it's assigned to."
+            >
+              <LabelPicker value={labelId} onChange={setLabelId} />
+            </Field>
+          )}
         </div>
 
-        <Field
-          label="Notes"
-          help="Context, links, what done looks like. The owner can keep this updated as they go."
-        >
-          <textarea
-            value={notes}
-            onChange={(e) => setNotes(e.target.value)}
-            rows={4}
-            placeholder="Anything the owner needs to know before starting."
-          />
-        </Field>
+        {!editing && (
+          <Field
+            label="Notes"
+            help="Context, links, what done looks like. Becomes the first entry in the task's update log — the owner adds to it from there as they go."
+          >
+            <textarea
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              rows={4}
+              placeholder="Anything the owner needs to know before starting."
+            />
+          </Field>
+        )}
 
         <Field
           label="Attachments"
@@ -190,14 +212,14 @@ export default function TaskModal({ task, people, clients, onClose, onSaved }) {
 
         {!editing && assignOthers && (
           <div className="notice">
-            The owner gets an alert straight away. They submit it when done, an admin verifies it,
-            and the CEO gives the final approval.
+            The owner gets an alert straight away. They submit it when done, and whoever checks
+            it signs it off in that same step — no separate approval to wait on afterwards.
           </div>
         )}
         {!editing && !assignOthers && (
           <div className="notice">
-            Submit it when it's done — your manager checks it, and the CEO gives the final
-            approval.
+            Submit it when it's done — your manager checking it is the final sign-off, in one
+            step.
           </div>
         )}
       </div>

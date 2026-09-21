@@ -13,7 +13,7 @@ import { Router } from 'express';
 import { db, nowSql, today, withTransaction } from '../db/index.js';
 import { requireAuth, requirePermission, requireAnyPermission } from '../middleware/auth.js';
 import { wrap, requireFields, oneOf, isoDate, bad } from '../lib/validate.js';
-import { can, taskScope, canViewTask, ownsStepOf, ownOnly } from '../access.js';
+import { can, taskScope, canViewTask, ownsStepOf, ownOnly, ROLE_LABEL } from '../access.js';
 import {
   STATUS_LABEL,
   WAITING_ON,
@@ -21,7 +21,6 @@ import {
   actionsFor,
   daysToDue,
   overdueState,
-  verifyCompletesTask,
   hasOtherChecker,
   record,
   history,
@@ -52,13 +51,16 @@ const SELECT = `
          v.name AS verifier_name,
          a.name AS approver_name,
          r.name AS returner_name,
-         (SELECT COUNT(*) FROM attachments x WHERE x.task_id = t.id) AS attachment_count
+         l.name AS label_name, l.color AS label_color,
+         (SELECT COUNT(*) FROM attachments x WHERE x.task_id = t.id) AS attachment_count,
+         (SELECT COUNT(*) FROM task_notes n WHERE n.task_id = t.id) AS note_count
     FROM tasks t
     JOIN users o      ON o.id = t.owner_id
     JOIN users c      ON c.id = t.created_by
     LEFT JOIN users v ON v.id = t.verified_by
     LEFT JOIN users a ON a.id = t.approved_by
-    LEFT JOIN users r ON r.id = t.returned_by`;
+    LEFT JOIN users r ON r.id = t.returned_by
+    LEFT JOIN labels l ON l.id = t.label_id`;
 
 async function shape(t, user) {
   const od = overdueState(t);
@@ -94,8 +96,19 @@ async function shape(t, user) {
     reassignedAt: t.reassigned_at,
     reassignCount: t.reassign_count,
     attachmentCount: t.attachment_count,
+    labelId: t.label_id,
+    labelName: t.label_name,
+    labelColor: t.label_color,
+    noteCount: t.note_count,
     daysToDue: daysToDue(t.completion_date),
     isOverdue: od.overdue,
+    // Who the delay actually sits with: 'owner' means the work itself is
+    // late, 'verifier' (occasionally 'approver', on a task a pre-migration
+    // database left at `verified`) means the owner already finished it and
+    // it is the check/sign-off that is overdue — see overdueState() in
+    // services/workflow.js. The interface reads this rather than inferring
+    // it from status, so "done, but red because nobody has signed off yet"
+    // never gets drawn as "the owner is late".
     lateSide: od.lateSide,
     mine: t.owner_id === user.id,
     createdAt: t.created_at,
@@ -156,12 +169,26 @@ router.get(
       where.push('o.team = ?');
       params.push(req.query.team);
     }
+    if (req.query.label) {
+      // 'none' is the one non-numeric value — "show me what nobody has
+      // labelled yet", which is exactly the gap a Manager working through
+      // labels by hand wants to find.
+      if (req.query.label === 'none') {
+        where.push('t.label_id IS NULL');
+      } else {
+        where.push('t.label_id = ?');
+        params.push(Number(req.query.label));
+      }
+    }
     const wantOverdue = req.query.overdue === 'true';
 
     if (req.query.q) {
-      where.push("(t.name LIKE ? ESCAPE '\\' OR t.client_name LIKE ? ESCAPE '\\' OR t.notes LIKE ? ESCAPE '\\')");
+      where.push(
+        "(t.name LIKE ? ESCAPE '\\' OR t.client_name LIKE ? ESCAPE '\\' OR t.notes LIKE ? ESCAPE '\\' " +
+          "OR EXISTS (SELECT 1 FROM task_notes n WHERE n.task_id = t.id AND n.body LIKE ? ESCAPE '\\'))"
+      );
       const like = `%${String(req.query.q).replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
-      params.push(like, like, like);
+      params.push(like, like, like, like);
     }
 
     const limit = Number(req.query.limit);
@@ -304,13 +331,25 @@ router.post(
     const name = String(req.body.name).trim();
     if (name.length < 3) bad('Give the task a name somebody will recognise later');
 
+    // Only a Manager or Super Admin may put a label on a task — a team
+    // member creating their own task never sends this field (the picker is
+    // not even shown to them), but a value sent anyway is quietly ignored
+    // rather than trusted, the same way a permission check elsewhere never
+    // takes the client's word for what it may do.
+    let labelId = null;
+    if (req.body.labelId !== undefined && req.body.labelId !== null && can(req.user, 'labels.manage')) {
+      const label = await db.prepare('SELECT id FROM labels WHERE id = ?').get(req.body.labelId);
+      if (!label) return res.status(400).json({ error: 'Pick a label that exists' });
+      labelId = label.id;
+    }
+
     const stamp = nowSql();
     const info = await db
       .prepare(
         `INSERT INTO tasks
-           (name, client_name, owner_id, completion_date, priority, notes,
+           (name, client_name, owner_id, completion_date, priority, notes, label_id,
             created_by, created_at, updated_at)
-         VALUES (?,?,?,?,?,?,?,?,?)`
+         VALUES (?,?,?,?,?,?,?,?,?,?)`
       )
       .run(
         name,
@@ -319,6 +358,7 @@ router.post(
         completionDate,
         req.body.priority || 'normal',
         req.body.notes ? String(req.body.notes).trim() : null,
+        labelId,
         req.user.id,
         stamp,
         stamp
@@ -367,14 +407,34 @@ router.patch(
     const stampNow = nowSql();
     let reassignment = null;
 
-    const notesOnly = Object.keys(req.body).every((k) => k === 'notes');
-    if (!a.canEdit && !a.canEditOwn && !(notesOnly && existing.owner_id === req.user.id)) {
+    // The label is its own permission (`labels.manage`), separate from the
+    // general edit flags above — a team member's `canEditOwn` covers fixing
+    // a typo or pushing a date on their own task, never labelling it, and a
+    // Manager may set the label on any task they can otherwise edit. So a
+    // request that touches only the label is let through here even when
+    // neither `canEdit` nor `canEditOwn` applies to this task, provided the
+    // requester actually holds `labels.manage` — checked again just below,
+    // for the same reason a permission check never trusts a single gate.
+    const labelOnly = Object.keys(req.body).every((k) => k === 'labelId');
+    if (!a.canEdit && !a.canEditOwn && !(labelOnly && can(req.user, 'labels.manage'))) {
       return res.status(403).json({ error: 'You cannot change that task' });
     }
 
-    if (req.body.notes !== undefined) {
-      sets.push('notes = ?');
-      params.push(req.body.notes ? String(req.body.notes).trim() : null);
+    if (req.body.labelId !== undefined) {
+      if (!can(req.user, 'labels.manage')) {
+        return res.status(403).json({ error: 'Only a Manager or Super Admin can set a task’s label' });
+      }
+      let label = null;
+      if (req.body.labelId !== null) {
+        label = await db.prepare('SELECT id, name FROM labels WHERE id = ?').get(req.body.labelId);
+        if (!label) return res.status(400).json({ error: 'Pick a label that exists' });
+      }
+      const nextLabelId = label ? label.id : null;
+      if (nextLabelId !== existing.label_id) {
+        sets.push('label_id = ?');
+        params.push(nextLabelId);
+        changes.push(label ? `label → ${label.name}` : 'label removed');
+      }
     }
 
     if (a.canEdit || a.canEditOwn) {
@@ -671,12 +731,26 @@ router.post(
   )
 );
 
-/** An admin confirms it came back done. */
+/**
+ * The manager confirms it came back done — which is also the final sign-off.
+ *
+ * Approval used to be a separate step the CEO took later. It is not any
+ * more: whoever checks a submitted task (almost always the manager; the CEO
+ * only as a fallback when no manager exists — see `canCheck` in
+ * services/workflow.js) finishes it in this one move. `verified_*` and
+ * `approved_*` are both written here, by the same person at the same
+ * moment, because "who checked it" and "who signed it off" are worth
+ * recording as their own facts even when one action answers both.
+ */
 router.post(
   '/:id/verify',
   wrap((req, res) =>
     transition(req, res, {
-      action: 'verified',
+      // Recorded as "approved" — see the comment above the route — even
+      // though the endpoint is still named /verify: the button the manager
+      // clicked said "Approve" (see MOVE.verify in client/src/lib/task.js),
+      // and the history line should say what actually happened.
+      action: 'approved',
       allow: (a, t, u) => {
         if (a.canVerify) return null;
         if (t.owner_id === u.id) {
@@ -687,69 +761,40 @@ router.post(
         }
         return { status: 403, error: 'Only the manager checks submitted work' };
       },
-      // When the owner is the only possible approver — the CEO's own work —
-      // verification is the last gate rather than leaving it stuck.
-      prepare: async ({ existing }) => ({ completesTask: await verifyCompletesTask(existing) }),
-      apply: ({ user, note, stamp, completesTask }) => {
-        if (completesTask) {
-          return {
-            set: {
-              status: 'approved',
-              verified_at: stamp,
-              verified_by: user.id,
-              verified_note: note,
-              approved_at: stamp,
-              approved_by: user.id,
-              approved_note: 'Completed on verification — the owner is the approver.',
-            },
-          };
-        }
-        return {
-          set: { status: 'verified', verified_at: stamp, verified_by: user.id, verified_note: note },
-        };
-      },
+      apply: ({ user, note, stamp }) => ({
+        set: {
+          status: 'approved',
+          verified_at: stamp,
+          verified_by: user.id,
+          verified_note: note,
+          approved_at: stamp,
+          approved_by: user.id,
+          approved_note: note,
+        },
+      }),
       notify: async ({ fresh, user }) => {
-        if (fresh.status === 'approved') {
-          await notifyTask({
-            userId: fresh.owner_id,
-            type: 'task_approved',
-            severity: 'info',
-            title: `Approved: ${fresh.name}`,
-            body: `${user.name} signed this off.`,
-            taskId: fresh.id,
-            dedupeKey: `approved:${fresh.id}`,
-          });
-          return;
-        }
-        const ceoRows = await db
-          .prepare("SELECT id FROM users WHERE is_active = 1 AND role = 'ceo' AND id <> ?")
-          .all(fresh.owner_id);
-        for (const c of ceoRows) {
-          await notifyTask({
-            userId: c.id,
-            type: 'task_verified',
-            severity: 'info',
-            title: `Ready for approval: ${fresh.name}`,
-            body: `${user.name} verified this. ${fresh.owner_name} did the work.`,
-            taskId: fresh.id,
-            dedupeKey: `verified:${fresh.id}:${c.id}:${fresh.verified_at}`,
-          });
-        }
         await notifyTask({
           userId: fresh.owner_id,
-          type: 'task_verified',
+          type: 'task_approved',
           severity: 'info',
-          title: `Verified: ${fresh.name}`,
-          body: `${user.name} checked it over. Waiting on final approval.`,
+          title: `Approved: ${fresh.name}`,
+          body: `${user.name} checked it and signed it off.${fresh.approved_note ? ` "${fresh.approved_note}"` : ''}`,
           taskId: fresh.id,
-          dedupeKey: `verified-owner:${fresh.id}:${fresh.verified_at}`,
+          dedupeKey: `approved:${fresh.id}`,
         });
       },
     })
   )
 );
 
-/** The CEO signs it off. */
+/**
+ * The final sign-off, for the rare case a task is still sitting at
+ * `verified` — a leftover from before approval moved to the manager (see
+ * `migrateApprovalToManager` in db/index.js, which sweeps those through on
+ * boot) or, in principle, a task the CEO checked under the fallback rule in
+ * `canCheck` without this route's usual caller reaching it first. Every
+ * task moving through the app today is approved by `/verify` above instead.
+ */
 router.post(
   '/:id/approve',
   wrap((req, res) =>
@@ -783,7 +828,7 @@ router.post(
                 : `Nothing to approve — this task is ${t.status}`,
           };
         }
-        return { status: 403, error: 'Only the CEO gives final approval' };
+        return { status: 403, error: 'Your role cannot give the final sign-off' };
       },
       apply: ({ user, note, stamp }) => ({
         set: { status: 'approved', approved_at: stamp, approved_by: user.id, approved_note: note },
@@ -928,6 +973,114 @@ router.post(
       },
     })
   )
+);
+
+// --- the dated log: daily updates, and comments -----------------------------
+
+const NOTE_SELECT = `
+  SELECT n.*, u.name AS author_name, u.role AS author_role
+    FROM task_notes n JOIN users u ON u.id = n.author_id`;
+
+function shapeNote(n, user) {
+  return {
+    id: n.id,
+    taskId: n.task_id,
+    body: n.body,
+    entryDate: n.entry_date,
+    createdAt: n.created_at,
+    authorId: n.author_id,
+    authorName: n.author_name,
+    authorRole: n.author_role,
+    // So the reader can tell a daily update from the owner apart from a
+    // comment somebody else left, without having to know every name in the
+    // company by role.
+    authorRoleLabel: ROLE_LABEL[n.author_role] || n.author_role,
+    mine: n.author_id === user.id,
+  };
+}
+
+/**
+ * The whole log for one task, oldest first — same ordering as History, and
+ * for the same reason: a reader scanning a day-by-day record expects it to
+ * read top to bottom in the order it happened.
+ */
+router.get(
+  '/:id/notes',
+  wrap(async (req, res) => {
+    const t = await load(req.params.id);
+    if (!t) return res.status(404).json({ error: 'Task not found' });
+    if (!(await canViewTask(req.user, t))) return res.status(403).json({ error: 'No access to that task' });
+
+    const rows = await db.prepare(`${NOTE_SELECT} WHERE n.task_id = ? ORDER BY n.entry_date, n.created_at, n.id`).all(t.id);
+    res.json({ notes: rows.map((n) => shapeNote(n, req.user)) });
+  })
+);
+
+/**
+ * Add an entry — a daily update from whoever is doing the work, or a comment
+ * from anyone else who can see the task (a manager, or the CEO reviewing by
+ * label — "share a comment on the tasks in case of any"). Anybody who can
+ * view a task may add to its log; there is no separate "who may comment"
+ * permission; the log always says who wrote each line, so a reader never
+ * mistakes one person's entry for another's.
+ *
+ * `entryDate` defaults to today but can be moved back with the calendar
+ * field on the form, for logging a day that was missed at the time —
+ * `createdAt`, when the entry was actually posted, is always the server's
+ * own clock and is never something the caller can set.
+ */
+router.post(
+  '/:id/notes',
+  wrap(async (req, res) => {
+    const t = await load(req.params.id);
+    if (!t) return res.status(404).json({ error: 'Task not found' });
+    if (!(await canViewTask(req.user, t))) return res.status(403).json({ error: 'No access to that task' });
+
+    const body = String(req.body.body || '').trim();
+    if (body.length < 2) bad('Say something worth logging');
+    if (body.length > 4000) bad('Keep an update under 4000 characters');
+
+    let entryDate = today();
+    if (req.body.entryDate !== undefined && req.body.entryDate !== null && req.body.entryDate !== '') {
+      entryDate = isoDate(req.body.entryDate, 'entryDate');
+    }
+
+    const stamp = nowSql();
+    const info = await db
+      .prepare(
+        `INSERT INTO task_notes (task_id, author_id, body, entry_date, created_at)
+         VALUES (?,?,?,?,?)`
+      )
+      .run(t.id, req.user.id, body, entryDate, stamp);
+
+    const isOwnUpdate = req.user.id === t.owner_id;
+    await record({
+      taskId: t.id,
+      actorId: req.user.id,
+      action: isOwnUpdate ? 'note_added' : 'commented',
+      from: t.status,
+      to: t.status,
+      note: body.length > 140 ? `${body.slice(0, 140)}…` : body,
+    });
+
+    // A person logging their own progress does not need to be told they did
+    // it; everyone else's entry — a manager's or the CEO's — is the kind of
+    // thing the owner would otherwise only see by opening the task again.
+    if (!isOwnUpdate) {
+      await notifyTask({
+        userId: t.owner_id,
+        type: 'task_commented',
+        severity: 'info',
+        title: `New comment: ${t.name}`,
+        body: `${req.user.name}: "${body.length > 140 ? `${body.slice(0, 140)}…` : body}"`,
+        taskId: t.id,
+        dedupeKey: `commented:${t.id}:${stamp}`,
+      });
+    }
+
+    const row = await db.prepare(`${NOTE_SELECT} WHERE n.id = ?`).get(info.lastInsertRowid);
+    res.status(201).json({ note: shapeNote(row, req.user) });
+  })
 );
 
 /**

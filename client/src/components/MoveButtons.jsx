@@ -63,13 +63,13 @@ const WITH_EVIDENCE = {
     cta: 'Mark done',
   },
   verify: {
-    title: 'Confirm it is done',
+    title: 'Approve it',
     label: 'What did you check?',
-    help: 'Optional, but it is what the CEO reads before approving.',
+    help: 'Optional — this is recorded as your sign-off, and the owner can read it back.',
     placeholder: 'e.g. Numbers match the rate card. Scope matches the notes.',
     fileLabel: 'Attach anything you produced',
     fileHelp: 'A marked-up copy, a checklist, a screenshot of the check.',
-    cta: 'Confirm done',
+    cta: 'Approve',
   },
 };
 

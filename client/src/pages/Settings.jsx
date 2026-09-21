@@ -233,19 +233,25 @@ export default function Settings() {
 
         <Card title="How the chain works" collapsible defaultCollapsed id="set-chain">
           <div className="small" style={{ color: 'var(--ink-secondary)', lineHeight: 1.7 }}>
-            You submit a task when you consider it done. An admin verifies it — checking the work,
-            not just the box — and then the CEO gives the final approval. Either reviewer can send
-            it back, and they have to say why; the reason lands on your task and in your alerts.
+            You submit a task when you consider it done. A manager checks it — checking the work,
+            not just the box — and that check is the final sign-off, in the same step. There is no
+            separate approval to wait on afterwards. The manager can send it back instead, and has
+            to say why; the reason lands on your task and in your alerts.
             <br />
             <br />
-            Nobody reviews their own work. If an admin owns a task, another admin or the CEO has to
-            verify it. The one exception is a task the CEO owns: with nobody above them, an admin's
-            verification completes it, and the record says so.
+            Nobody reviews their own work. If a manager owns a task, another manager has to check
+            it — or, if there is no other manager to do it, the CEO can as a fallback, and the
+            record says so.
             <br />
             <br />
-            Alerts watch three things: your completion dates, submissions nobody has verified, and
-            verified work nobody has approved. The last two matter because from a client's point of
-            view a task stuck in a review queue is just as late as one nobody started.
+            The CEO does not check or approve work. She sees every task — grouped by label as well
+            as by person — and can leave a comment on any of them, which lands in that task's dated
+            log alongside the owner's own updates.
+            <br />
+            <br />
+            Alerts watch two things: your completion dates, and submissions nobody has checked yet
+            — a task stuck waiting on a check is, from a client's point of view, just as late as
+            one nobody started.
           </div>
         </Card>
       </div>

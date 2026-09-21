@@ -114,6 +114,8 @@ export async function migrate() {
   const schema = fs.readFileSync(path.join(here, 'schema.sql'), 'utf8');
   await client.executeMultiple(schema);
   await patch();
+  await migrateApprovalToManager();
+  await migrateNotesToLog();
 }
 
 /**
@@ -136,10 +138,10 @@ async function patch() {
     await client.execute('ALTER TABLE notifications ADD COLUMN snoozed_until TEXT');
   }
 
-  // The breakdown. A whole table rather than a column, so it arrives by way of
-  // schema.sql's CREATE TABLE IF NOT EXISTS on an existing database too —
-  // nothing to do here but say so, and check, because a silent assumption about
-  // which tables exist is how a migration goes wrong.
+  // The breakdown, and labels. Whole tables rather than columns, so they
+  // arrive by way of schema.sql's CREATE TABLE IF NOT EXISTS on an existing
+  // database too — nothing to do here but say so, and check, because a silent
+  // assumption about which tables exist is how a migration goes wrong.
   const tables = (
     await client.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
   ).rows.map((t) => t.name);
@@ -149,6 +151,98 @@ async function patch() {
   if (!tables.includes('projects')) {
     throw new Error('projects is missing — schema.sql did not run. The database may be read-only.');
   }
+  if (!tables.includes('labels')) {
+    throw new Error('labels is missing — schema.sql did not run. The database may be read-only.');
+  }
+  if (!tables.includes('task_notes')) {
+    throw new Error('task_notes is missing — schema.sql did not run. The database may be read-only.');
+  }
+
+  // Which task a label sits on. Needs `labels` to already exist, which the
+  // schema.sql pass just above guarantees.
+  if (!taskColumns.includes('label_id')) {
+    await client.execute('ALTER TABLE tasks ADD COLUMN label_id INTEGER REFERENCES labels(id) ON DELETE SET NULL');
+  }
+}
+
+/**
+ * Approval used to end with the CEO; now it ends with whoever checks the
+ * work (the Manager, almost always — see services/workflow.js and the
+ * `/tasks/:id/verify` route). Nothing written after that change ever leaves
+ * a task sitting in `verified` — the check completes it in one move — so
+ * this only ever has anything to do on a database that has tasks left over
+ * from before the change, and it does nothing at all once it has swept them,
+ * which is what makes it safe to run on every boot rather than once by hand.
+ *
+ * Each row keeps its own history rather than a blanket note: the person who
+ * did the actual checking is credited as the approver too, on the day they
+ * checked it — not "migrated on <today>" — because that is what actually
+ * happened; the approval step just stopped being a separate wait after that.
+ */
+async function migrateApprovalToManager() {
+  const stuck = await client.execute({
+    sql: "SELECT id, verified_at, verified_by FROM tasks WHERE status = 'verified'",
+    args: [],
+  });
+  if (!stuck.rows.length) return;
+
+  const note =
+    'Auto-approved: sign-off now completes as soon as the manager checks it, ' +
+    'so this no longer waits on a separate CEO approval.';
+  const stamp = nowSql();
+
+  for (const t of stuck.rows) {
+    const approverId = t.verified_by ?? null;
+    await client.execute({
+      sql: `UPDATE tasks
+               SET status = 'approved', approved_at = ?, approved_by = ?, approved_note = ?, updated_at = ?
+             WHERE id = ?`,
+      args: [t.verified_at ?? stamp, approverId, note, stamp, t.id],
+    });
+    if (approverId) {
+      await client.execute({
+        sql: `INSERT INTO task_events (task_id, actor_id, action, from_status, to_status, note, created_at)
+              VALUES (?,?,?,?,?,?,?)`,
+        args: [t.id, approverId, 'approved', 'verified', 'approved', note, t.verified_at ?? stamp],
+      });
+      await client.execute({
+        sql: `INSERT OR IGNORE INTO notifications
+                (user_id, type, severity, title, body, task_id, dedupe_key, created_at)
+              SELECT owner_id, 'task_approved', 'info', 'Approved: ' || name, ?, id, 'approved:' || id, ?
+                FROM tasks WHERE id = ?`,
+        args: [note, stamp, t.id],
+      });
+    }
+  }
+  console.log(`[migrate] moved ${stuck.rows.length} task(s) stuck at "verified" straight to "approved"`);
+}
+
+/**
+ * Carry a task's original `notes` field into the new dated log as its first
+ * entry, so a task that already had notes on it does not start the log
+ * looking emptier than the task's actual history. Guarded by "no log entry
+ * yet" rather than a one-off flag: a fresh task created with notes on it
+ * gets logged the same way the next time this runs, and a task that already
+ * has entries — migrated or written by hand — is never touched again.
+ */
+async function migrateNotesToLog() {
+  const rows = await client.execute({
+    sql: `SELECT id, notes, created_by, created_at FROM tasks
+           WHERE notes IS NOT NULL AND trim(notes) <> ''
+             AND NOT EXISTS (SELECT 1 FROM task_notes n WHERE n.task_id = tasks.id)`,
+    args: [],
+  });
+  if (!rows.rows.length) return;
+
+  for (const t of rows.rows) {
+    const entryDate = String(t.created_at || nowSql()).slice(0, 10);
+    await client.execute({
+      sql: `INSERT INTO task_notes (task_id, author_id, body, entry_date, created_at)
+            VALUES (?,?,?,?,?)`,
+      args: [t.id, t.created_by, t.notes, entryDate, t.created_at || nowSql()],
+    });
+  }
+  console.log(`[migrate] logged the original notes on ${rows.rows.length} task(s) as their first update`);
 }
 
 /** What the app reports about where its data lives. */

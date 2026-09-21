@@ -29,6 +29,11 @@ export const NOTIFICATION_TYPES = [
   'review_stalled',
   'approval_stalled',
   'task_reassigned',
+  // A note-log entry from somebody other than the owner — a manager's or the
+  // CEO's comment (see the notes log in routes/tasks.js). The owner's own
+  // daily updates do not notify anybody; this is only for what somebody else
+  // added.
+  'task_commented',
   'chat_message',
   // The breakdown. A step past its date is late; a follow-up past its date is
   // simply your turn — see services/steps.js for why that distinction is kept

@@ -1,13 +1,27 @@
 /**
  * The approval chain — the one piece of logic this product exists for.
  *
- *   open ──submit──▶ submitted ──verify──▶ verified ──approve──▶ approved
- *                        │                    │
- *                        └──── return ────────┴──▶ back to open, with a reason
+ *   open ──submit──▶ submitted ──verify──▶ approved
+ *                        │
+ *                        └──── return ────▶ back to open, with a reason
  *
- * Same three rules as the on-prem edition (nobody signs off their own work).
- * The only change for the Vercel/Turso edition: every function that queries
- * the database is `async` now, which cascades to `actionsFor` (it calls
+ * Approval used to be a third gate the CEO opened separately — submitted,
+ * then verified by the manager, then approved by the CEO. It is not any
+ * more: checking a task (`/tasks/:id/verify`) *is* the sign-off now, in one
+ * move, by whoever checks it — the manager, almost always. The `verified`
+ * status and the `verified_*`/`approved_*` columns are still there, both
+ * written together by that one move, because "who checked it" and "who
+ * signed it off" are still two questions worth answering even when one
+ * person answers both at once — and because a database that predates this
+ * change may still have a task sitting at `verified` (db/index.js migrates
+ * those straight to `approved` on boot; see `migrateApprovalToManager`
+ * there). The CEO keeps seeing everything and can leave a comment on any of
+ * it (see the notes log in routes/tasks.js), but no longer holds up a task
+ * that is otherwise finished.
+ *
+ * Same rule as ever underneath (nobody signs off their own work). The only
+ * change for the Vercel/Turso edition: every function that queries the
+ * database is `async` now, which cascades to `actionsFor` (it calls
  * `canCheck`) and therefore to every route that shapes a task — those all
  * `await actionsFor(...)` now instead of calling it plain.
  */
@@ -18,7 +32,10 @@ export const STATUSES = ['open', 'submitted', 'verified', 'approved', 'cancelled
 export const STATUS_LABEL = {
   open: 'Open',
   submitted: 'Submitted for completion',
-  verified: 'Verified — awaiting approval',
+  // Kept only for a task a pre-migration database still has sitting here —
+  // see the note above. Nothing written after this change leaves a task at
+  // this status; the check completes it.
+  verified: 'Checked — awaiting sign-off',
   approved: 'Approved',
   cancelled: 'Cancelled',
 };
@@ -26,7 +43,7 @@ export const STATUS_LABEL = {
 export const WAITING_ON = {
   open: 'the owner',
   submitted: 'the manager to check',
-  verified: 'the CEO to approve',
+  verified: 'the manager to finish signing off',
   approved: 'nobody — signed off',
   cancelled: 'nobody — cancelled',
 };
@@ -66,22 +83,6 @@ export async function canCheck(task, user, can) {
   if (!can(user, 'tasks.verify')) return false;
   if (user.role === 'ceo') return hasOtherChecker(task.owner_id).then((v) => !v);
   return true;
-}
-
-/** Somebody other than this person who could approve. */
-export async function hasOtherApprover(ownerId) {
-  const row = await db
-    .prepare(`SELECT COUNT(*) AS c FROM users WHERE is_active = 1 AND role = 'ceo' AND id <> ?`)
-    .get(ownerId);
-  return row.c > 0;
-}
-
-/**
- * When the owner is the only person who could approve — the CEO's own tasks —
- * verification is the last gate.
- */
-export async function verifyCompletesTask(task) {
-  return !(await hasOtherApprover(task.owner_id));
 }
 
 /**

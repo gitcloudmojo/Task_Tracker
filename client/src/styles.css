@@ -799,6 +799,11 @@ input:disabled, select:disabled, textarea:disabled { opacity: 0.6; cursor: not-a
 .t-row:last-child { border-bottom: none; }
 .t-row.overdue { background: color-mix(in srgb, var(--critical) 4%, transparent); }
 .t-row.overdue:hover { background: color-mix(in srgb, var(--critical) 7%, transparent); }
+/* Past its date, but the owner already finished it — waiting on somebody
+   else's check, not on them. Deliberately not red: red on this row would
+   say the wrong person is holding it up. */
+.t-row.pending-review { background: var(--accent-wash); }
+.t-row.pending-review:hover { background: color-mix(in srgb, var(--accent) 15%, transparent); }
 
 @supports not (grid-template-columns: subgrid) {
   .t-list { display: flex; flex-direction: column; }
@@ -833,6 +838,12 @@ input:disabled, select:disabled, textarea:disabled { opacity: 0.6; cursor: not-a
 .flag-high { color: var(--critical); font-weight: 560; }
 .flag-back { color: #8a5a00; font-weight: 560; }
 :root[data-theme="dark"] .flag-back { color: var(--warning); }
+.flag-pending { color: var(--accent); font-weight: 560; }
+.flag-label {
+  padding: 1px 7px; border-radius: 999px; font-weight: 560; font-size: 11px;
+  color: var(--accent); background: var(--accent-wash);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+}
 
 .t-check {
   display: flex; align-items: baseline; gap: 6px;
@@ -851,6 +862,9 @@ input:disabled, select:disabled, textarea:disabled { opacity: 0.6; cursor: not-a
 .due.warning { color: #8a5a00; }
 :root[data-theme="dark"] .due.warning { color: var(--warning); }
 .due.muted { color: var(--ink-muted); font-weight: 500; }
+/* Done, just waiting on somebody else's check — see dueLabel() in
+   lib/task.js. Same slot as .due.critical, a different colour on purpose. */
+.due.pending { color: var(--accent); }
 
 .moves { display: flex; gap: 7px; justify-content: flex-end; flex-wrap: wrap; }
 
@@ -896,6 +910,13 @@ input:disabled, select:disabled, textarea:disabled { opacity: 0.6; cursor: not-a
   border-color: color-mix(in srgb, var(--critical) 40%, var(--border));
   background: color-mix(in srgb, var(--critical) 6%, transparent);
 }
+/* Past its date, but not the owner's doing — see the overdue callout in
+   TaskDetail.jsx. Accent rather than red or amber: neither of those colours
+   belongs on news that somebody already finished their part. */
+.callout.info {
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+  background: var(--accent-wash);
+}
 .callout a { font-weight: 560; }
 
 .footnote {
@@ -916,6 +937,7 @@ input:disabled, select:disabled, textarea:disabled { opacity: 0.6; cursor: not-a
 .due-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-muted); }
 .due-date { font-size: 15px; font-weight: 620; letter-spacing: -0.01em; }
 .due-date.late { color: var(--critical); }
+.due-date.pending { color: var(--accent); }
 
 /* The four gates of the approval chain: dot above, label below, and a hairline
    in the gap between dots. The line lives between the dots and never crosses a
@@ -1178,6 +1200,26 @@ input:disabled, select:disabled, textarea:disabled { opacity: 0.6; cursor: not-a
   font-size: 12.5px; color: var(--ink-secondary); line-height: 1.5;
   margin-top: 3px; overflow-wrap: anywhere;
 }
+
+/* --- the dated log: daily updates and comments ---------------------------- */
+
+.notes-log { display: flex; flex-direction: column; }
+.note-entry { padding: 10px 2px; border-bottom: 1px solid var(--border); }
+.note-entry:last-child { border-bottom: none; }
+.note-head { display: flex; align-items: baseline; gap: 7px; font-size: 13px; flex-wrap: wrap; }
+.note-when { margin-left: auto; white-space: nowrap; }
+.note-body {
+  font-size: 13.5px; line-height: 1.55; color: var(--ink); margin-top: 3px;
+  overflow-wrap: anywhere; white-space: pre-wrap;
+}
+.note-compose {
+  padding-top: 12px; border-top: 1px solid var(--border);
+}
+.note-compose-row {
+  display: flex; align-items: center; gap: 10px; margin-top: 8px; flex-wrap: wrap;
+}
+.note-date-field { display: flex; align-items: center; gap: 6px; }
+.note-date-field input[type="date"] { padding: 5px 8px; font-size: 12.5px; }
 
 /* --- where work is sitting ----------------------------------------------- */
 

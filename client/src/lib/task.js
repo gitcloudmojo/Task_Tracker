@@ -26,13 +26,17 @@ export const STATUS = {
     short: 'With manager',
     heldBy: 'with the manager to check',
   },
+  // Kept only for a task a pre-migration database still had sitting here —
+  // see the note atop server/src/services/workflow.js. Checking a task now
+  // signs it off in the same move, so nothing written after that change ever
+  // leaves a task at this status.
   verified: {
-    label: 'Checked — waiting for approval',
+    label: 'Checked — finishing sign-off',
     tone: 'warning',
     icon: '◕',
-    waiting: 'the CEO',
-    short: 'With CEO',
-    heldBy: 'with the CEO to approve',
+    waiting: 'the manager',
+    short: 'With manager',
+    heldBy: 'with the manager to finish signing off',
   },
   approved: {
     label: 'Approved',
@@ -67,8 +71,13 @@ export const PIPELINE = ['open', 'submitted', 'verified'];
  */
 export const MOVE = {
   submit: { label: 'Mark done', kind: 'primary' },
-  verify: { label: 'Confirm done', kind: 'primary' },
-  approve: { label: 'Approve', kind: 'primary' },
+  // This is the final word now — checking a submitted task signs it off in
+  // the same move, so the button says what it actually does rather than
+  // naming a step that used to come after it.
+  verify: { label: 'Approve', kind: 'primary' },
+  // Only ever shown on the rare task a pre-migration database left sitting
+  // at "verified" — see server/src/services/workflow.js.
+  approve: { label: 'Give final sign-off', kind: 'primary' },
   return: { label: 'Send back', kind: '' },
   reopen: { label: 'Reopen', kind: '' },
   cancel: { label: 'Cancel task', kind: 'ghost' },
@@ -78,6 +87,9 @@ export const MOVE = {
 export const ACTION_LABEL = {
   created: 'created and assigned',
   submitted: 'marked it done',
+  // Kept for a history row written before checking and signing off became
+  // one move — a task approved the old way still reads "checked it" and
+  // then, later, "approved it" as two separate lines, exactly as it happened.
   verified: 'checked it',
   approved: 'approved it',
   returned: 'sent it back',
@@ -93,6 +105,8 @@ export const ACTION_LABEL = {
   step_changed: 'changed a step',
   step_removed: 'removed a step',
   submitted_with_open_steps: 'marked it done with steps still open',
+  note_added: 'logged an update',
+  commented: 'left a comment',
 };
 
 export const ACTION_ICON = {
@@ -113,6 +127,8 @@ export const ACTION_ICON = {
   step_changed: '✎',
   step_removed: '⌫',
   submitted_with_open_steps: '⚑',
+  note_added: '✎',
+  commented: '✎',
 };
 
 /** Human file size. */
@@ -177,11 +193,23 @@ export function stepDueLabel(step) {
 /**
  * How a due date reads. Overdue is stated in days late rather than as a date,
  * because "9 days late" lands and "due 15 Aug" needs arithmetic.
+ *
+ * `lateSide` (from the server's `overdueState()`) is what keeps a task the
+ * owner already finished from reading as if the owner were the one running
+ * late: once it is submitted, the days past the date belong to whoever has
+ * not checked it yet, not to the person who turned it in. Same arithmetic,
+ * a different word and a different colour — "critical" red is reserved for
+ * work nobody has done yet.
  */
-export function dueLabel(days, status) {
+export function dueLabel(days, status, lateSide) {
   if (status === 'approved' || status === 'cancelled') return null;
   if (days === null || days === undefined) return null;
-  if (days < 0) return { text: `${Math.abs(days)}d late`, tone: 'critical' };
+  if (days < 0) {
+    if (lateSide && lateSide !== 'owner') {
+      return { text: `done — ${Math.abs(days)}d awaiting sign-off`, tone: 'pending' };
+    }
+    return { text: `${Math.abs(days)}d late`, tone: 'critical' };
+  }
   if (days === 0) return { text: 'due today', tone: 'warning' };
   if (days === 1) return { text: 'due tomorrow', tone: 'warning' };
   if (days <= 7) return { text: `in ${days}d`, tone: '' };

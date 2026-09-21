@@ -154,6 +154,60 @@ CREATE INDEX IF NOT EXISTS idx_steps_task  ON task_steps(task_id, position, id);
 CREATE INDEX IF NOT EXISTS idx_steps_owner ON task_steps(owner_id, done_at);
 
 -- ---------------------------------------------------------------------------
+-- Labels.
+--
+-- A Manager's own tag for a task — usually the wider project or engagement
+-- that several different people's tasks belong to, so somebody who can see
+-- every task (the CEO, above all) can pull up "everything under Website
+-- Relaunch" in one click, across however many different owners hold a piece
+-- of it. Deliberately not the same thing as `client_name` (billing) or
+-- `projects` (a manager's own staffing list, above) — a label exists only to
+-- group tasks for reading, and a task carries at most one, on
+-- `tasks.label_id` (added by db/index.js's `patch()`, the same way
+-- `reassigned_at` was, since this table has to exist first).
+--
+-- Only `labels.manage` (Manager, Super Admin — see access.js) may create one
+-- or put it on a task; everyone who can see the task can see its label.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS labels (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  name        TEXT    NOT NULL UNIQUE,
+  color       TEXT,
+  created_by  INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+  updated_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+-- ---------------------------------------------------------------------------
+-- Notes — the dated log on a task.
+--
+-- Replaces a single overwritable `notes` field (still on `tasks` — see
+-- below) with an append-only log: every entry keeps who wrote it, when it was
+-- actually posted (`created_at`, set by the server and never editable), and
+-- which day it is *about* (`entry_date`, a plain date the writer can move
+-- backward with a calendar field to log a day they forgot to update at the
+-- time — defaults to today).
+--
+-- Doubles as where a manager or the CEO leaves a comment: same table, same
+-- feed, nothing separate to keep in sync — the only difference is who wrote
+-- the entry, which the reader already sees.
+--
+-- `tasks.notes` is left in place rather than dropped — it is what the task
+-- was created with, and db/index.js's `patch()` copies it into this log as
+-- that task's first entry the first time it sees a task with notes and no
+-- log yet, so nothing written before this feature existed is lost.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS task_notes (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_id     INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  author_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  body        TEXT    NOT NULL,
+  entry_date  TEXT    NOT NULL,
+  created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_task_notes_task ON task_notes(task_id, entry_date, id);
+
+-- ---------------------------------------------------------------------------
 -- Projects.
 --
 -- Deliberately not derived from `tasks.client_name`. A task's client is

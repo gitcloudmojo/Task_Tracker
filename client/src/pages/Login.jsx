@@ -33,8 +33,8 @@ export default function Login() {
           <CompanyLine />
         </div>
         <p className="login-lede">
-          Work is assigned, marked done by whoever did it, checked by the manager, then approved by
-          the CEO — three pairs of eyes, one record of who did what.
+          Work is assigned, marked done by whoever did it, and checked by the manager — the same
+          step that signs it off. One record of who did what, and one place for anyone to comment.
         </p>
 
         <form onSubmit={submit} className="stack" style={{ gap: 12 }}>

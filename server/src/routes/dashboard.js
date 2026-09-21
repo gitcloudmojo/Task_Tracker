@@ -20,8 +20,10 @@ router.get(
 
     const rows = await db
       .prepare(
-        `SELECT t.*, o.name AS owner_name, o.team AS owner_team
-           FROM tasks t JOIN users o ON o.id = t.owner_id
+        `SELECT t.*, o.name AS owner_name, o.team AS owner_team, l.name AS label_name
+           FROM tasks t
+           JOIN users o ON o.id = t.owner_id
+           LEFT JOIN labels l ON l.id = t.label_id
           WHERE ${S.sql}`
       )
       .all(...S.params);
@@ -66,6 +68,12 @@ router.get(
     let byPerson = [];
     let byClient = [];
     let byTeam = [];
+    // The CEO's "bifurcation" — the whole reason a Manager labels a task at
+    // all: several different people's tasks, grouped by the one project or
+    // engagement they share, with one click through to that filtered list
+    // (client/src/pages/Tasks.jsx's Label filter reads the same `label`
+    // query param this key names).
+    let byLabel = [];
     if (can(req.user, 'tasks.view_all')) {
       const group = (keyFn) => {
         const map = new Map();
@@ -87,6 +95,26 @@ router.get(
       byPerson = group((t) => t.owner_name);
       byClient = group((t) => t.client_name);
       byTeam = group((t) => t.owner_team);
+
+      // Its own pass rather than group(): a row here needs the label's id,
+      // not just its name, so the interface can link straight into
+      // /tasks?label=<id> — group() only ever carries a display string.
+      const labelMap = new Map();
+      for (const t of rows) {
+        const id = t.label_id ?? null;
+        const name = t.label_name || 'No label';
+        const e =
+          labelMap.get(id) ||
+          { id, key: name, live: 0, overdue: 0, awaitingReview: 0, awaitingApproval: 0, approved: 0, total: 0 };
+        e.total += 1;
+        if (['open', 'submitted', 'verified'].includes(t.status)) e.live += 1;
+        if (overdueState(t).overdue) e.overdue += 1;
+        if (t.status === 'submitted') e.awaitingReview += 1;
+        if (t.status === 'verified') e.awaitingApproval += 1;
+        if (t.status === 'approved') e.approved += 1;
+        labelMap.set(id, e);
+      }
+      byLabel = [...labelMap.values()].sort((a, b) => b.live - a.live || b.total - a.total);
     }
 
     const attention = live
@@ -168,6 +196,7 @@ router.get(
       byPerson,
       byClient,
       byTeam,
+      byLabel,
       attention,
       generatedFor: today(),
     });

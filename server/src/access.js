@@ -17,9 +17,9 @@ export const ROLE_LABEL = {
 };
 
 export const ROLE_NOTE = {
-  superadmin: 'The one account above everything else — approves like the CEO, manages and permanently deletes people and tasks like the Manager, and is the only role that can create another Super Admin.',
-  ceo: 'Sees every task and gives the final approval.',
-  admin: 'Assigns work, checks it came back done, and manages people.',
+  superadmin: 'The one account above everything else — signs off work like the Manager, manages and permanently deletes people and tasks, and is the only role that can create another Super Admin.',
+  ceo: 'Sees every task across the company — by label as well as by person — and can leave a comment on any of them. Approval itself now finishes with the Manager.',
+  admin: 'Assigns work, checks it came back done — which is also the final sign-off — labels tasks by project, and manages people.',
   user: 'Sees their own tasks and marks them done for the manager to check.',
 };
 
@@ -36,6 +36,8 @@ export const APPOINTERS = {
 const GRANTS = {
   superadmin: [
     'tasks.view_all',
+    // Kept as a defensive fallback only — see the note above `tasks.approve`
+    // on `admin`, below. Nothing in normal use ever needs it.
     'tasks.approve',
     'tasks.verify',
     'tasks.reopen',
@@ -45,6 +47,7 @@ const GRANTS = {
     'tasks.assign',
     'tasks.cancel',
     'tasks.delete',
+    'labels.manage',
     'team.view',
     'team.manage',
     'users.delete',
@@ -57,9 +60,19 @@ const GRANTS = {
     'reports.view',
     'projects.view',
   ],
+  // The CEO no longer approves — checking a task (`tasks.verify`, still held
+  // by `admin` below) *is* the final sign-off now, so approval ends at the
+  // Manager and never reaches the CEO's desk. What the CEO keeps: seeing
+  // everything (`tasks.view_all`, including grouped by label), and leaving a
+  // comment on a task — which needs no permission of its own, since anyone
+  // who can see a task may add to its notes log (see routes/tasks.js).
   ceo: [
     'tasks.view_all',
-    'tasks.approve',
+    // Kept as the fallback checker for the rare case where a task's owner is
+    // a manager and no *other* manager exists to check it (see
+    // hasOtherChecker() in services/workflow.js). Normal use never reaches
+    // this — a manager's own check is the everyday path, and is also the
+    // final sign-off now, so this is not a second approval step.
     'tasks.verify',
     'tasks.reopen',
     'tasks.export',
@@ -74,7 +87,15 @@ const GRANTS = {
     'tasks.cancel',
     'tasks.delete',
     'tasks.verify',
+    // Checking a submitted task (`tasks.verify`) now finishes it in the same
+    // move — see the `/tasks/:id/verify` route — so this is never actually
+    // reached in normal use; it stays only as a safety net for a task a
+    // pre-existing installation left sitting at `verified`, until the
+    // one-time data migration (db/index.js) sweeps it through.
+    'tasks.approve',
+    'tasks.reopen',
     'tasks.export',
+    'labels.manage',
     'team.view',
     'team.manage',
     'users.delete',
@@ -151,7 +172,12 @@ export async function assignableUsers() {
 }
 
 export function scopeLabel(user) {
-  if (can(user, 'tasks.approve')) return 'Every task across the company';
+  // Role-based rather than permission-based: the CEO no longer holds
+  // `tasks.approve` (checking a task is the final word now, and that stays
+  // with the Manager), but the CEO's view of the company is still its own
+  // thing — everything, grouped and commentable — not the Manager's
+  // assign-and-check job.
+  if (user.role === 'ceo') return 'Every task across the company — yours to review by label and comment on';
   if (can(user, 'tasks.view_all')) return 'Every task — yours to assign and check';
   return 'The tasks assigned to you';
 }

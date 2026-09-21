@@ -284,9 +284,11 @@ export default function Team() {
               ))}
             </div>
             <div className="small muted" style={{ marginTop: 12, lineHeight: 1.6 }}>
-              Note what the CEO does not hold: creating tasks and managing people are the manager's
-              job, so the CEO reviews the work rather than administering the tool. These were called
-              indicative at kick-off — they live in one file and are easy to change.
+              Note what the CEO does not hold: creating tasks, managing people, and checking work are
+              all the manager's job — a manager's check is also the final sign-off, so nothing waits
+              on the CEO. What she keeps is seeing everything (by label as well as by person) and
+              leaving a comment on any task. These were called indicative at kick-off — they live in
+              one file and are easy to change.
             </div>
           </Card>
         )}
@@ -334,7 +336,7 @@ export default function Team() {
               )}
               <Field
                 label="Role *"
-                help="A team member does the work. A manager assigns it, checks it, and manages people. The CEO approves. Super Admin can do all of that, plus permanently delete people and tasks."
+                help="A team member does the work. A manager assigns it, checks it — which is also the final sign-off — and manages people. The CEO sees everything and comments. Super Admin can do all of that, plus permanently delete people and tasks."
               >
                 <select value={form.role} onChange={set('role')}>
                   <option value="user">Team member</option>

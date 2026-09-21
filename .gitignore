@@ -5,3 +5,8 @@ server/data/
 preview/shots/
 *.log
 .DS_Store
+
+# Local scratch DB used for testing migrations against a throwaway file
+# instead of the production Turso database — never the production record.
+server/local-dev.db
+server/local-dev.db-*

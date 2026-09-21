@@ -7,9 +7,12 @@
  *   one sentence  →  one list  →  the actions on each row
  *
  * A team member's list is their own work. The manager's list is everything
- * waiting to be checked — the question she asks every morning, answered before
- * she clicks anything. The CEO's list is what the manager has already checked,
- * which is the only queue that is his to move.
+ * waiting to be checked — the question she asks every morning, answered
+ * before she clicks anything, and checking one here is also its final
+ * sign-off. The CEO no longer has a queue to move at all — approval ends
+ * with the check above — so her list is the company sliced by label: every
+ * task that belongs to the same project, whoever it is assigned to, with a
+ * click through to comment on any of them.
  *
  * Everything that used to crowd this screen — pipeline counts, breakdown
  * tables, filters — moved to All tasks. This page holds one number and one
@@ -23,7 +26,7 @@ import Layout from '../components/Layout.jsx';
 import TaskRow from '../components/TaskRow.jsx';
 import TaskModal from '../components/TaskModal.jsx';
 import ImportTasksModal from '../components/ImportTasksModal.jsx';
-import { Card, Empty, ErrorBanner } from '../components/ui.jsx';
+import { Card, Empty, ErrorBanner, Badge } from '../components/ui.jsx';
 import MySteps from '../components/MySteps.jsx';
 
 export default function Home() {
@@ -83,8 +86,16 @@ export default function Home() {
   }
 
   const firstName = user.name.split(' ')[0];
-  const isManager = can('tasks.verify');
-  const isCeo = can('tasks.approve');
+  // `tasks.verify` — checking a submitted task, which is now also the final
+  // sign-off (see server/src/services/workflow.js) — is normally a Manager
+  // or Super Admin's job. The CEO still technically holds it too, but only
+  // as the fallback for when no Manager exists (`canCheck` in
+  // services/workflow.js), so the CEO gets the "To check" tab only when that
+  // fallback has actually put something on their desk, not as standing
+  // furniture that is empty every day.
+  const isManagerRole = user.role === 'admin' || user.role === 'superadmin';
+  const isCeo = user.role === 'ceo';
+  const showCheckTab = isManagerRole || queue.toVerify.length > 0;
 
   const myOpen = mine.filter((t) => t.status === 'open');
   const myWaiting = mine.filter((t) => t.status === 'submitted' || t.status === 'verified');
@@ -94,34 +105,28 @@ export default function Home() {
   /**
    * The tabs, in the order this role cares about them. The first one is what
    * the page opens on, so each role lands on their own queue without choosing.
+   *
+   * There is no "To approve" tab any more — approval finishes with whoever
+   * checks a task (see the comment on `showCheckTab`), so it never reaches a
+   * separate queue for the CEO to work through. What the CEO gets instead is
+   * the "By label" panel below the tabs, and — on any task — the notes log
+   * to leave a comment on.
    */
   const tabs = [];
-  if (isCeo) {
-    tabs.push({
-      key: 'approve',
-      label: 'To approve',
-      count: queue.toApprove.length,
-      rows: queue.toApprove,
-      hint: 'checked by your manager — yours is the final word',
-      showCheck: true,
-      empty: 'Nothing waiting on your approval.',
-      showOwner: true,
-    });
-  }
-  if (isManager) {
+  if (showCheckTab) {
     tabs.push({
       key: 'check',
       label: 'To check',
       count: queue.toVerify.length,
       rows: queue.toVerify,
-      hint: 'the person says it is done — confirm it, and it goes to the CEO',
+      hint: 'the person says it is done — checking it here signs it off, in one step',
       empty: 'Nothing waiting to be checked.',
       showOwner: true,
     });
   }
   tabs.push({
     key: 'todo',
-    label: isManager || isCeo ? 'My own tasks' : 'To do',
+    label: can('tasks.view_all') ? 'My own tasks' : 'To do',
     count: myOpen.length,
     rows: myOpen,
     hint: 'mark each one done when it is finished',
@@ -150,7 +155,7 @@ export default function Home() {
   // A reviewer's own submitted and approved work is a footnote, not a tab —
   // they have All tasks for that. For a team member it is the other half of
   // their working week, so they keep both.
-  if (!isManager && !isCeo) {
+  if (user.role === 'user') {
     tabs.push({
       key: 'waiting',
       label: 'With the manager',
@@ -176,8 +181,11 @@ export default function Home() {
 
   const active = tabs.find((t) => t.key === tab) || tabs[0];
 
-  // The headline: one sentence naming the single most pressing thing.
-  const onMe = (isCeo ? queue.toApprove.length : 0) + (isManager ? queue.toVerify.length : 0);
+  // The headline: one sentence naming the single most pressing thing. Both
+  // counts are already permission-filtered by the server (an empty array for
+  // whichever queue this role does not hold), so adding them needs no role
+  // check of its own here.
+  const onMe = queue.toVerify.length + queue.toApprove.length;
   const lateMine = myOpen.filter((t) => t.isOverdue).length;
   /**
    * The steps worth interrupting somebody about: late, or a follow-up whose day
@@ -341,6 +349,57 @@ export default function Home() {
           )}
         </Card>
 
+        {/* The CEO's "bifurcations": every task grouped by the label a
+            Manager put on it — usually the wider project several different
+            people's tasks belong to — so pulling up "everything under
+            Website Relaunch" is one click, whoever ended up owning each
+            piece of it. Each row opens the same filtered list All tasks
+            already offers via its Label filter. */}
+        {isCeo && dash.byLabel?.length > 0 && (
+          <Card
+            title="By label"
+            hint="every task across the company, grouped by what it belongs to"
+            id="home-by-label"
+          >
+            <div className="table-scroll">
+              <table className="data">
+                <thead>
+                  <tr>
+                    <th>Label</th>
+                    <th className="num">Live</th>
+                    <th className="num">Late</th>
+                    <th className="num">To check</th>
+                    <th className="num">Approved</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {dash.byLabel.map((r) => (
+                    <tr key={r.id ?? 'none'}>
+                      <td>
+                        <Link to={`/tasks?label=${r.id ?? 'none'}`} className="strong">
+                          {r.key}
+                        </Link>
+                      </td>
+                      <td className="num">{r.live}</td>
+                      <td className="num">
+                        {r.overdue ? <Badge tone="critical">{r.overdue}</Badge> : <span className="muted">0</span>}
+                      </td>
+                      <td className="num">
+                        {r.awaitingReview ? (
+                          <Badge tone="accent">{r.awaitingReview}</Badge>
+                        ) : (
+                          <span className="muted">0</span>
+                        )}
+                      </td>
+                      <td className="num muted">{r.approved}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+        )}
+
         {/* One quiet line for the wider picture, for whoever can see it. Not a
             grid of numbers — a sentence with a way in. */}
         {!dash.ownOnly && (
@@ -348,8 +407,12 @@ export default function Home() {
             Across the company: {dash.totals.live} live
             {dash.totals.overdue > 0 && <> · <strong className="bad">{dash.totals.overdue} late</strong></>}
             {' · '}
-            {dash.stalls.withOwner} being worked on · {dash.stalls.withVerifier} to check ·{' '}
-            {dash.stalls.withApprover} to approve
+            {dash.stalls.withOwner} being worked on · {dash.stalls.withVerifier} to check
+            {/* Only ever nonzero on a task a pre-migration database left
+                sitting at "verified" — see server/src/services/workflow.js.
+                Nothing new leaves a task in that state, so this clause
+                mentions it only while there is actually one to mention. */}
+            {dash.stalls.withApprover > 0 && <> · {dash.stalls.withApprover} awaiting sign-off</>}
             <Link className="footnote-link" to="/tasks">
               See all tasks →
             </Link>

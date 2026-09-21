@@ -21,7 +21,10 @@ const VIEWS = [
   { value: 'live', label: 'Live' },
   { value: 'overdue', label: 'Late' },
   { value: 'submitted', label: 'To check' },
-  { value: 'verified', label: 'To approve' },
+  // 'verified' is the status a pre-migration database could still have a
+  // task sitting at — see server/src/services/workflow.js. Kept as a filter
+  // in case there is ever one to find, worded for what it actually is now.
+  { value: 'verified', label: 'Awaiting sign-off' },
   { value: 'approved', label: 'Approved' },
   { value: 'all', label: 'All' },
 ];
@@ -30,6 +33,7 @@ const GROUPS = [
   { key: 'byPerson', label: 'By person' },
   { key: 'byClient', label: 'By client' },
   { key: 'byTeam', label: 'By team' },
+  { key: 'byLabel', label: 'By label' },
 ];
 
 export default function Tasks() {
@@ -39,6 +43,7 @@ export default function Tasks() {
   const [dash, setDash] = useState(null);
   const [people, setPeople] = useState([]);
   const [clients, setClients] = useState([]);
+  const [labels, setLabels] = useState([]);
   const [error, setError] = useState(null);
   const [creating, setCreating] = useState(false);
   const [importing, setImporting] = useState(false);
@@ -47,6 +52,7 @@ export default function Tasks() {
   const [view, setView] = useState(params.get('view') || 'live');
   const [owner, setOwner] = useState(params.get('owner') || '');
   const [client, setClient] = useState('');
+  const [label, setLabel] = useState(params.get('label') || '');
   const [search, setSearch] = useState('');
 
   const load = () => {
@@ -58,6 +64,7 @@ export default function Tasks() {
     } else if (view !== 'all') q.status = view;
     if (owner) q.ownerId = owner;
     if (client) q.client = client;
+    if (label) q.label = label;
     if (search) q.q = search;
     api
       .get(`/tasks${qs(q)}`)
@@ -66,7 +73,7 @@ export default function Tasks() {
     api.get('/dashboard').then(setDash).catch(() => {});
   };
 
-  useEffect(load, [view, owner, client]);
+  useEffect(load, [view, owner, client, label]);
 
   useEffect(() => {
     const id = setTimeout(load, 250);
@@ -76,6 +83,7 @@ export default function Tasks() {
   useEffect(() => {
     api.get('/users').then((d) => setPeople(d.users)).catch(() => {});
     api.get('/tasks/clients').then((d) => setClients(d.clients)).catch(() => {});
+    api.get('/labels').then((d) => setLabels(d.labels)).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -84,8 +92,10 @@ export default function Tasks() {
     else next.set('view', view);
     if (owner) next.set('owner', owner);
     else next.delete('owner');
+    if (label) next.set('label', label);
+    else next.delete('label');
     setParams(next, { replace: true });
-  }, [view, owner]);
+  }, [view, owner, label]);
 
   const t = dash?.totals;
   const rows = dash?.[group] || [];
@@ -138,6 +148,20 @@ export default function Tasks() {
               </option>
             ))}
           </select>
+          {/* The CEO's way in to "everything under one label, whoever it's
+              assigned to" — the same click a row in Home's "By label" panel
+              makes, landing here with this already set. */}
+          {labels.length > 0 && (
+            <select value={label} onChange={(e) => setLabel(e.target.value)} style={{ maxWidth: 200 }}>
+              <option value="">Any label</option>
+              {labels.map((l) => (
+                <option key={l.id} value={l.id}>
+                  {l.name} ({l.taskCount})
+                </option>
+              ))}
+              <option value="none">No label</option>
+            </select>
+          )}
           <input
             type="text"
             placeholder="Search name, client or notes…"

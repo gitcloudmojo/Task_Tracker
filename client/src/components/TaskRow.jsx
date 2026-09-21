@@ -19,13 +19,25 @@ export default function TaskRow({
   showStatus = false,
   /** Inline action buttons, so the common case never needs the detail page. */
   actionable = false,
-  /** Who checked it and what they said — the CEO's whole question. */
+  /**
+   * Who checked it and what they said. No tab turns this on today — checking
+   * a task is now also its final sign-off, so there is no longer a separate
+   * "what did the check say" queue the way there was when the CEO's approval
+   * came after it — but a row can still ask for it wherever that question
+   * matters again.
+   */
   showCheck = false,
   onChanged,
   onError,
 }) {
   const s = STATUS[t.status] || STATUS.open;
-  const due = dueLabel(t.daysToDue, t.status);
+  const due = dueLabel(t.daysToDue, t.status, t.lateSide);
+  // The row only gets the red "overdue" treatment when the work itself is
+  // late — the owner has not finished it. A task the owner already turned
+  // in that is now waiting past its date on somebody else's check is a
+  // different problem (and not this row's fault), so it gets its own,
+  // quieter treatment instead — see dueLabel() in lib/task.js.
+  const doneAwaitingSignOff = t.isOverdue && t.lateSide && t.lateSide !== 'owner';
   /**
    * The next unfinished dated step — but only when there is something to say
    * about it. A row that names the next step on every task doubles its own
@@ -37,7 +49,7 @@ export default function TaskRow({
   const next = nextDue && (nextDue.tone === 'critical' || nextDue.tone === 'warning') ? nextDue : null;
 
   return (
-    <div className={`t-row${t.isOverdue ? ' overdue' : ''}`}>
+    <div className={`t-row${t.isOverdue ? (doneAwaitingSignOff ? ' pending-review' : ' overdue') : ''}`}>
       <div className="t-main">
         <Link to={`/tasks/${t.id}`} className="t-name">
           {t.name}
@@ -46,6 +58,10 @@ export default function TaskRow({
           <span className="t-client">{t.clientName}</span>
           {showOwner && <span className="muted">· {t.ownerName}</span>}
           {t.priority === 'high' && <span className="flag-high">High</span>}
+          {t.labelName && <span className="flag-label">{t.labelName}</span>}
+          {/* Says plainly that the owner's part is done, right next to the
+              date that would otherwise read as if they were the ones late. */}
+          {doneAwaitingSignOff && <span className="flag-pending">done — awaiting sign-off</span>}
           {t.returnCount > 0 && t.status !== 'approved' && (
             <span className="flag-back" title={t.returnReason || undefined}>
               sent back{t.returnCount > 1 ? ` ${t.returnCount}×` : ''}
