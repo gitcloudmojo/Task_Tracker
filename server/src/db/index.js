@@ -135,6 +135,13 @@ async function patch() {
   if (!taskColumns.includes('label_id')) {
     await client.execute('ALTER TABLE tasks ADD COLUMN label_id INTEGER REFERENCES labels(id) ON DELETE SET NULL');
   }
+  // Deliberately not in schema.sql: on a database that already had `tasks`
+  // before label_id existed, CREATE TABLE IF NOT EXISTS there is a no-op, so
+  // an index on label_id would be asked for before the ALTER TABLE above ever
+  // ran — which is exactly what broke production (SQL_INPUT_ERROR: no such
+  // column: label_id). By construction, label_id exists by this line either
+  // way, so the index is safe to create here instead, every time.
+  await client.execute('CREATE INDEX IF NOT EXISTS idx_tasks_label ON tasks(label_id)');
   if (!(await columns('notifications')).includes('snoozed_until')) {
     await client.execute('ALTER TABLE notifications ADD COLUMN snoozed_until TEXT');
   }

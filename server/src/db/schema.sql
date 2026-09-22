@@ -145,7 +145,12 @@ CREATE TABLE IF NOT EXISTS tasks (
 CREATE INDEX IF NOT EXISTS idx_tasks_owner  ON tasks(owner_id, status);
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status, completion_date);
 CREATE INDEX IF NOT EXISTS idx_tasks_client ON tasks(client_name);
-CREATE INDEX IF NOT EXISTS idx_tasks_label  ON tasks(label_id);
+-- idx_tasks_label is NOT created here. On a database that already had a
+-- `tasks` table before label_id existed, this file's CREATE TABLE IF NOT
+-- EXISTS is a no-op (the table already exists), so label_id would not exist
+-- yet at this point in the script — only patch() below adds it, with
+-- ALTER TABLE. An index on a column that may not exist yet has to be created
+-- after that ALTER, not here; see patch() in db/index.js.
 
 -- ---------------------------------------------------------------------------
 -- The breakdown: the steps a task is made of.
