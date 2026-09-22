@@ -160,8 +160,22 @@ async function patch() {
     throw new Error('task_notes is missing — schema.sql did not run. The database may be read-only.');
   }
 
-  await closeOutStaleApprovals();
-  await carryForwardLegacyNotes();
+  // These two are one-time data backfills, not schema — the tables and
+  // columns above are what a request actually needs to exist. A single bad
+  // row in either backfill must never be able to take the whole app down:
+  // this middleware runs in front of every request (see index.js), so an
+  // uncaught rejection here would fail every login, not just the migration.
+  // Logged loudly so it is not silently lost, but never rethrown.
+  try {
+    await closeOutStaleApprovals();
+  } catch (err) {
+    console.error('[migrate] closeOutStaleApprovals failed — continuing without it:', err);
+  }
+  try {
+    await carryForwardLegacyNotes();
+  } catch (err) {
+    console.error('[migrate] carryForwardLegacyNotes failed — continuing without it:', err);
+  }
 }
 
 /**
@@ -180,35 +194,46 @@ async function patch() {
  */
 async function closeOutStaleApprovals() {
   const stale = (
-    await client.execute("SELECT id, verified_at, verified_by FROM tasks WHERE status = 'verified'")
+    await client.execute(
+      "SELECT id, verified_at, verified_by, created_by FROM tasks WHERE status = 'verified'"
+    )
   ).rows;
   for (const t of stale) {
-    const stamp = t.verified_at || nowSql();
-    await client.execute({
-      sql: `UPDATE tasks SET status = 'approved', approved_at = ?, approved_by = ?, approved_note = ? WHERE id = ?`,
-      args: [
-        stamp,
-        t.verified_by ?? null,
-        'Auto-approved: a manager’s verification is now the final sign-off, so this no longer waits on the CEO.',
-        t.id,
-      ],
-    });
-    await client.execute({
-      sql: `INSERT INTO task_events (task_id, actor_id, action, from_status, to_status, note, created_at)
-            VALUES (?,?,?,?,?,?,?)`,
-      // actor_id is NOT NULL and has no sensible "the system did this" value —
-      // attributed to whoever verified it, since their check is what this
-      // migration is now treating as the sign-off.
-      args: [
-        t.id,
-        t.verified_by,
-        'approved',
-        'verified',
-        'approved',
-        'Workflow change: verification now completes a task, so this — caught mid-flight — was closed out rather than left waiting on an approval step that no longer exists.',
-        nowSql(),
-      ],
-    });
+    try {
+      const stamp = t.verified_at || nowSql();
+      // task_events.actor_id is NOT NULL and has no sensible "the system did
+      // this" value. Ordinarily verified_by is set — a task cannot reach
+      // 'verified' without somebody checking it — but a row from far enough
+      // back, or one edited by hand, might not have it. Falling back to
+      // created_by (itself NOT NULL) keeps this migration from ever failing
+      // on a row it cannot perfectly attribute; the note below says so.
+      const actorId = t.verified_by ?? t.created_by;
+      const attributionNote =
+        t.verified_by == null
+          ? 'Auto-approved: a manager’s verification is now the final sign-off, so this no longer waits on the CEO. (No verifier was recorded on this task, so it is logged against whoever created it.)'
+          : 'Auto-approved: a manager’s verification is now the final sign-off, so this no longer waits on the CEO.';
+      await client.execute({
+        sql: `UPDATE tasks SET status = 'approved', approved_at = ?, approved_by = ?, approved_note = ? WHERE id = ?`,
+        args: [stamp, t.verified_by ?? null, attributionNote, t.id],
+      });
+      await client.execute({
+        sql: `INSERT INTO task_events (task_id, actor_id, action, from_status, to_status, note, created_at)
+              VALUES (?,?,?,?,?,?,?)`,
+        args: [
+          t.id,
+          actorId,
+          'approved',
+          'verified',
+          'approved',
+          'Workflow change: verification now completes a task, so this — caught mid-flight — was closed out rather than left waiting on an approval step that no longer exists.',
+          nowSql(),
+        ],
+      });
+    } catch (err) {
+      // One row's worth of bad data must never stop the rest of the batch,
+      // or the boot-time check that runs this at all — see patch()'s caller.
+      console.error(`[migrate] closeOutStaleApprovals: skipped task ${t.id}:`, err);
+    }
   }
 }
 
@@ -233,13 +258,19 @@ async function carryForwardLegacyNotes() {
     )
   ).rows;
   for (const t of legacy) {
-    const stamp = t.updated_at || nowSql();
-    const entryDate = String(stamp).slice(0, 10);
-    await client.execute({
-      sql: `INSERT INTO task_notes (task_id, author_id, body, entry_date, created_at)
-            VALUES (?,?,?,?,?)`,
-      args: [t.id, t.created_by, t.notes, entryDate, stamp],
-    });
+    try {
+      const stamp = t.updated_at || nowSql();
+      const entryDate = String(stamp).slice(0, 10);
+      await client.execute({
+        sql: `INSERT INTO task_notes (task_id, author_id, body, entry_date, created_at)
+              VALUES (?,?,?,?,?)`,
+        args: [t.id, t.created_by, t.notes, entryDate, stamp],
+      });
+    } catch (err) {
+      // Same reasoning as closeOutStaleApprovals: a single row must never be
+      // able to stop the batch, let alone the request that triggered it.
+      console.error(`[migrate] carryForwardLegacyNotes: skipped task ${t.id}:`, err);
+    }
   }
 }
 
