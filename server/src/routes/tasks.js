@@ -21,12 +21,12 @@ import {
   actionsFor,
   daysToDue,
   overdueState,
-  verifyCompletesTask,
   hasOtherChecker,
   record,
   history,
 } from '../services/workflow.js';
 import { notifyTask } from '../services/alerts.js';
+import { notesFor, addNote } from '../services/notes.js';
 import {
   summariesFor,
   withSteps,
@@ -52,13 +52,15 @@ const SELECT = `
          v.name AS verifier_name,
          a.name AS approver_name,
          r.name AS returner_name,
+         l.name AS label_name, l.color AS label_color,
          (SELECT COUNT(*) FROM attachments x WHERE x.task_id = t.id) AS attachment_count
     FROM tasks t
     JOIN users o      ON o.id = t.owner_id
     JOIN users c      ON c.id = t.created_by
     LEFT JOIN users v ON v.id = t.verified_by
     LEFT JOIN users a ON a.id = t.approved_by
-    LEFT JOIN users r ON r.id = t.returned_by`;
+    LEFT JOIN users r ON r.id = t.returned_by
+    LEFT JOIN labels l ON l.id = t.label_id`;
 
 async function shape(t, user) {
   const od = overdueState(t);
@@ -72,6 +74,9 @@ async function shape(t, user) {
     completionDate: t.completion_date,
     priority: t.priority,
     notes: t.notes,
+    labelId: t.label_id,
+    labelName: t.label_name,
+    labelColor: t.label_color,
     status: t.status,
     statusLabel: STATUS_LABEL[t.status],
     waitingOn: WAITING_ON[t.status],
@@ -156,6 +161,17 @@ router.get(
       where.push('o.team = ?');
       params.push(req.query.team);
     }
+    if (req.query.label) {
+      // 'none' asks for tasks nobody has bothered to file under a project yet
+      // — worth asking for on its own, since it is exactly what a manager
+      // wants to see when tidying up.
+      if (req.query.label === 'none') {
+        where.push('t.label_id IS NULL');
+      } else {
+        where.push('t.label_id = ?');
+        params.push(Number(req.query.label));
+      }
+    }
     const wantOverdue = req.query.overdue === 'true';
 
     if (req.query.q) {
@@ -205,7 +221,7 @@ router.get(
 router.get(
   '/queue',
   wrap(async (req, res) => {
-    const out = { toDo: [], toVerify: [], toApprove: [] };
+    const out = { toDo: [], toVerify: [], toApprove: [], recentlyApproved: [] };
 
     const toDoRows = await db
       .prepare(`${SELECT} WHERE t.owner_id = ? AND t.status = 'open' ORDER BY t.completion_date`)
@@ -220,10 +236,22 @@ router.get(
       out.toVerify = shaped.filter((t) => t.canVerify);
     }
     if (can(req.user, 'tasks.approve')) {
+      // Dead in the ordinary flow — see workflow.js's `verifyCompletesTask` —
+      // kept for the same reason `canApprove` is: cheap insurance against a
+      // task that somehow still ends up here.
       const rows = await db
         .prepare(`${SELECT} WHERE t.status = 'verified' AND t.owner_id <> ? ORDER BY t.verified_at`)
         .all(req.user.id);
       out.toApprove = await shapeAll(rows, req.user);
+
+      // What replaced it on the CEO's Home tab: there is nothing left to
+      // action, so instead of an empty "to approve" queue, a short list of
+      // what a manager has just signed off — company-wide, since the CEO
+      // holds tasks.view_all — to open and comment on if anything looks off.
+      const recentRows = await db
+        .prepare(`${SELECT} WHERE t.status = 'approved' ORDER BY t.approved_at DESC LIMIT 15`)
+        .all();
+      out.recentlyApproved = await shapeAll(recentRows, req.user);
     }
     res.json(out);
   })
@@ -272,7 +300,35 @@ router.get(
       canAddSteps: canAddSteps(t, req.user, can),
       stepKinds: KINDS.map((k) => ({ key: k, label: KIND_LABEL[k], note: KIND_NOTE[k] })),
       history: await history(t.id),
+      notes: await notesFor(t.id),
     });
+  })
+);
+
+/**
+ * Add one entry to the log. Gated the same way reading the task already is —
+ * `canViewTask`, not `canEdit` — so the owner logging daily progress, a
+ * manager leaving an instruction, and the CEO leaving a comment all go
+ * through the same door: if you can see the task, you can add to its log.
+ * There is no edit or delete here on purpose; see schema.sql's comment on
+ * `task_notes` for why this is append-only.
+ */
+router.post(
+  '/:id/notes',
+  wrap(async (req, res) => {
+    const t = await load(req.params.id);
+    if (!t) return res.status(404).json({ error: 'Task not found' });
+    if (!(await canViewTask(req.user, t))) return res.status(403).json({ error: 'No access to that task' });
+
+    const result = await addNote({
+      taskId: t.id,
+      authorId: req.user.id,
+      body: req.body.body,
+      entryDate: req.body.entryDate,
+    });
+    if (result.error) return res.status(400).json({ error: result.error });
+
+    res.status(201).json({ notes: await notesFor(t.id) });
   })
 );
 
@@ -304,13 +360,25 @@ router.post(
     const name = String(req.body.name).trim();
     if (name.length < 3) bad('Give the task a name somebody will recognise later');
 
+    // Only a manager (or Super Admin) files a task under a label — a team
+    // member creating their own task via `tasks.create_own` never sees the
+    // field, so this silently ignores one rather than erroring on it: there
+    // is no UI path that would send it, and the one call site that matters
+    // (a manager's own create form) already gates on the same permission.
+    let labelId = null;
+    if (req.body.labelId && can(req.user, 'tasks.edit')) {
+      const label = await db.prepare('SELECT id FROM labels WHERE id = ?').get(req.body.labelId);
+      if (!label) return res.status(400).json({ error: 'Pick an existing label' });
+      labelId = label.id;
+    }
+
     const stamp = nowSql();
     const info = await db
       .prepare(
         `INSERT INTO tasks
-           (name, client_name, owner_id, completion_date, priority, notes,
+           (name, client_name, owner_id, completion_date, priority, notes, label_id,
             created_by, created_at, updated_at)
-         VALUES (?,?,?,?,?,?,?,?,?)`
+         VALUES (?,?,?,?,?,?,?,?,?,?)`
       )
       .run(
         name,
@@ -319,12 +387,24 @@ router.post(
         completionDate,
         req.body.priority || 'normal',
         req.body.notes ? String(req.body.notes).trim() : null,
+        labelId,
         req.user.id,
         stamp,
         stamp
       );
 
     const id = info.lastInsertRowid;
+
+    // The starting context ("what done looks like", a brief, a link) becomes
+    // the log's first entry, dated to today — same log a daily update later
+    // lands in, rather than a second, invisible place the initial note would
+    // otherwise sit until the log carried it forward at the next server
+    // restart (see db/index.js's `carryForwardLegacyNotes`, which only walks
+    // existing rows on boot and would not see this one for a while).
+    if (req.body.notes && String(req.body.notes).trim()) {
+      await addNote({ taskId: id, authorId: req.user.id, body: req.body.notes });
+    }
+
     await record({
       taskId: id,
       actorId: req.user.id,
@@ -375,6 +455,31 @@ router.patch(
     if (req.body.notes !== undefined) {
       sets.push('notes = ?');
       params.push(req.body.notes ? String(req.body.notes).trim() : null);
+    }
+
+    /**
+     * The label. Its own block, deliberately outside `a.canEdit || a.canEditOwn`
+     * below: `canEditOwn` covers a team member fixing their own self-created
+     * task, and filing work under a project is not theirs to decide — only a
+     * manager (or Super Admin) may, full stop, whichever task it is. Checked
+     * again here rather than trusted from `a`, because `a` has no flag for
+     * this at all — the permission is `tasks.edit` itself, asked directly.
+     */
+    if (req.body.labelId !== undefined) {
+      if (!can(req.user, 'tasks.edit')) {
+        return res.status(403).json({ error: 'Only a manager can set a task’s label' });
+      }
+      let labelId = null;
+      let labelName = null;
+      if (req.body.labelId !== null && req.body.labelId !== '') {
+        const label = await db.prepare('SELECT id, name FROM labels WHERE id = ?').get(req.body.labelId);
+        if (!label) return res.status(400).json({ error: 'Pick an existing label' });
+        labelId = label.id;
+        labelName = label.name;
+      }
+      sets.push('label_id = ?');
+      params.push(labelId);
+      changes.push(labelId ? `label → ${labelName}` : 'label removed');
     }
 
     if (a.canEdit || a.canEditOwn) {
@@ -671,7 +776,14 @@ router.post(
   )
 );
 
-/** An admin confirms it came back done. */
+/**
+ * A manager confirms it came back done — which is the sign-off. There used
+ * to be a further CEO approval after this; that gate was retired (see
+ * workflow.js's file comment and `verifyCompletesTask`), so this single move
+ * both records the check and completes the task, the way it already did for
+ * the one case that always worked this way — a CEO's own task, where there
+ * was nobody else left to approve. That is now everybody's case.
+ */
 router.post(
   '/:id/verify',
   wrap((req, res) =>
@@ -687,63 +799,44 @@ router.post(
         }
         return { status: 403, error: 'Only the manager checks submitted work' };
       },
-      // When the owner is the only possible approver — the CEO's own work —
-      // verification is the last gate rather than leaving it stuck.
-      prepare: async ({ existing }) => ({ completesTask: await verifyCompletesTask(existing) }),
-      apply: ({ user, note, stamp, completesTask }) => {
-        if (completesTask) {
-          return {
-            set: {
-              status: 'approved',
-              verified_at: stamp,
-              verified_by: user.id,
-              verified_note: note,
-              approved_at: stamp,
-              approved_by: user.id,
-              approved_note: 'Completed on verification — the owner is the approver.',
-            },
-          };
-        }
-        return {
-          set: { status: 'verified', verified_at: stamp, verified_by: user.id, verified_note: note },
-        };
-      },
+      apply: ({ user, note, stamp }) => ({
+        set: {
+          status: 'approved',
+          verified_at: stamp,
+          verified_by: user.id,
+          verified_note: note,
+          approved_at: stamp,
+          approved_by: user.id,
+          approved_note: note || 'Approved on verification — a manager’s check is the final sign-off.',
+        },
+      }),
       notify: async ({ fresh, user }) => {
-        if (fresh.status === 'approved') {
-          await notifyTask({
-            userId: fresh.owner_id,
-            type: 'task_approved',
-            severity: 'info',
-            title: `Approved: ${fresh.name}`,
-            body: `${user.name} signed this off.`,
-            taskId: fresh.id,
-            dedupeKey: `approved:${fresh.id}`,
-          });
-          return;
-        }
+        await notifyTask({
+          userId: fresh.owner_id,
+          type: 'task_approved',
+          severity: 'info',
+          title: `Approved: ${fresh.name}`,
+          body: `${user.name} signed this off.`,
+          taskId: fresh.id,
+          dedupeKey: `approved:${fresh.id}`,
+        });
+        // The CEO no longer has to act on this, but full visibility is the
+        // whole point of what replaced the approval step — they hear about it
+        // like anybody else watching the company's work go by.
         const ceoRows = await db
           .prepare("SELECT id FROM users WHERE is_active = 1 AND role = 'ceo' AND id <> ?")
           .all(fresh.owner_id);
         for (const c of ceoRows) {
           await notifyTask({
             userId: c.id,
-            type: 'task_verified',
+            type: 'task_approved',
             severity: 'info',
-            title: `Ready for approval: ${fresh.name}`,
-            body: `${user.name} verified this. ${fresh.owner_name} did the work.`,
+            title: `Approved: ${fresh.name}`,
+            body: `${user.name} checked and signed off "${fresh.name}" for ${fresh.owner_name}.`,
             taskId: fresh.id,
-            dedupeKey: `verified:${fresh.id}:${c.id}:${fresh.verified_at}`,
+            dedupeKey: `approved-ceo-fyi:${fresh.id}:${c.id}`,
           });
         }
-        await notifyTask({
-          userId: fresh.owner_id,
-          type: 'task_verified',
-          severity: 'info',
-          title: `Verified: ${fresh.name}`,
-          body: `${user.name} checked it over. Waiting on final approval.`,
-          taskId: fresh.id,
-          dedupeKey: `verified-owner:${fresh.id}:${fresh.verified_at}`,
-        });
       },
     })
   )

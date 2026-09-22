@@ -21,9 +21,11 @@ import TaskModal from '../components/TaskModal.jsx';
 import ReassignModal from '../components/ReassignModal.jsx';
 import MoveButtons from '../components/MoveButtons.jsx';
 import StepList from '../components/StepList.jsx';
-import { Card, Badge, Empty, ErrorBanner, ClipIcon } from '../components/ui.jsx';
+import { Card, Badge, Empty, ErrorBanner, ClipIcon, Field } from '../components/ui.jsx';
 import { STATUS, PRIORITY, ACTION_LABEL, ACTION_ICON, fileSize, dueLabel } from '../lib/task.js';
 import { dateLabel, dateTimeLabel, relativeTime } from '../lib/format.js';
+
+const today = () => new Date().toISOString().slice(0, 10);
 
 /**
  * The four gates of the approval chain, as one line.
@@ -91,20 +93,20 @@ export default function TaskDetail() {
   const [reassigning, setReassigning] = useState(false);
   const [people, setPeople] = useState([]);
   const [clients, setClients] = useState([]);
-  const [notes, setNotes] = useState('');
-  const [savingNotes, setSavingNotes] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [labels, setLabels] = useState([]);
+  const [labelBusy, setLabelBusy] = useState(false);
+  const [newLabelOpen, setNewLabelOpen] = useState(false);
+  const [newLabelName, setNewLabelName] = useState('');
+  const [addingLabel, setAddingLabel] = useState(false);
+  const [noteBody, setNoteBody] = useState('');
+  const [noteDate, setNoteDate] = useState(today());
+  const [addingNote, setAddingNote] = useState(false);
 
-  const load = () =>
-    api
-      .get(`/tasks/${id}`)
-      .then((d) => {
-        setData(d);
-        setNotes(d.task.notes || '');
-      })
-      .catch(setError);
+  const load = () => api.get(`/tasks/${id}`).then(setData).catch(setError);
+  const loadLabels = () => api.get('/labels').then((d) => setLabels(d.labels)).catch(() => {});
 
   useEffect(() => {
     load();
@@ -113,6 +115,7 @@ export default function TaskDetail() {
   useEffect(() => {
     api.get('/users').then((d) => setPeople(d.users)).catch(() => {});
     api.get('/tasks/clients').then((d) => setClients(d.clients)).catch(() => {});
+    loadLabels();
   }, []);
 
   const act = async (fn) => {
@@ -154,6 +157,52 @@ export default function TaskDetail() {
     }
   };
 
+  const addNote = async () => {
+    if (!noteBody.trim()) return;
+    setAddingNote(true);
+    setError(null);
+    try {
+      await api.post(`/tasks/${id}/notes`, { body: noteBody.trim(), entryDate: noteDate || undefined });
+      setNoteBody('');
+      setNoteDate(today());
+      await load();
+    } catch (err) {
+      setError(err);
+    } finally {
+      setAddingNote(false);
+    }
+  };
+
+  const setLabel = async (labelId) => {
+    setLabelBusy(true);
+    setError(null);
+    try {
+      await api.patch(`/tasks/${id}`, { labelId: labelId || null });
+      await load();
+    } catch (err) {
+      setError(err);
+    } finally {
+      setLabelBusy(false);
+    }
+  };
+
+  const createLabel = async () => {
+    if (!newLabelName.trim()) return;
+    setAddingLabel(true);
+    setError(null);
+    try {
+      const d = await api.post('/labels', { name: newLabelName.trim() });
+      setNewLabelName('');
+      setNewLabelOpen(false);
+      await loadLabels();
+      await setLabel(d.label.id);
+    } catch (err) {
+      setError(err);
+    } finally {
+      setAddingLabel(false);
+    }
+  };
+
   if (error && !data) {
     return (
       <Layout title="Task">
@@ -176,9 +225,14 @@ export default function TaskDetail() {
 
   const t = data.task;
   const s = STATUS[t.status];
-  const due = dueLabel(t.daysToDue, t.status);
-  const notesChanged = (t.notes || '') !== notes;
-  const canEditNotes = t.mine || t.canEdit;
+  const due = dueLabel(t.daysToDue, t.status, t.lateSide);
+  // Red only when the lateness is genuinely the owner's — still open, past
+  // its date. Once the owner has done their part and it is sitting with a
+  // reviewer, the amber `due` tone above already says so without painting
+  // the whole task as if the person doing the work were the one holding it
+  // up. See lib/task.js's dueLabel for the reasoning.
+  const ownerLate = t.isOverdue && t.lateSide === 'owner';
+  const canSetLabel = can('tasks.edit');
   // The bar also appears when there is no move to make *because* the breakdown
   // is holding it — that is when the reader most needs to be told why.
   const hasMove =
@@ -249,13 +303,13 @@ export default function TaskDetail() {
         )}
 
         {t.isOverdue && (
-          <div className="callout bad">
+          <div className={`callout ${ownerLate ? 'bad' : 'warn'}`}>
             <div>
               <strong>{Math.abs(t.daysToDue)} days past the completion date.</strong>{' '}
               {t.status === 'open'
                 ? 'Still with the person doing it.'
                 : t.status === 'submitted'
-                  ? 'Marked done — waiting on the manager to check it.'
+                  ? `Completed by ${t.ownerName} — waiting on the manager to check it.`
                   : 'Checked — waiting on the CEO.'}
             </div>
           </div>
@@ -271,7 +325,7 @@ export default function TaskDetail() {
             <div className="spacer" />
             <span className="due-block">
               <span className="due-label">Complete by</span>
-              <span className={`due-date${t.isOverdue ? ' late' : ''}`}>
+              <span className={`due-date${ownerLate ? ' late' : ''}`}>
                 {dateLabel(t.completionDate)}
               </span>
               {due && <span className={`due ${due.tone}`}>{due.text}</span>}
@@ -289,9 +343,7 @@ export default function TaskDetail() {
                 </span>
               )}
               {t.canVerify && (
-                <span className="small muted">
-                  Confirming sends it up to the CEO for the final approval.
-                </span>
+                <span className="small muted">Confirming is the final sign-off — this approves it.</span>
               )}
             </div>
           )}
@@ -305,6 +357,57 @@ export default function TaskDetail() {
           <span>
             <b>Assigned by</b> {t.creatorName}
           </span>
+          {/* Only a manager sets this (see access.js — it rides on `tasks.edit`),
+              but everybody who can see the task sees which project it is
+              filed under, which is the whole point for the CEO. */}
+          {canSetLabel ? (
+            <span className="row" style={{ gap: 6 }}>
+              <b>Label</b>
+              <select
+                value={t.labelId || ''}
+                disabled={labelBusy}
+                onChange={(e) => setLabel(e.target.value ? Number(e.target.value) : null)}
+                style={{ display: 'inline-block', width: 'auto' }}
+              >
+                <option value="">— none —</option>
+                {labels.map((l) => (
+                  <option key={l.id} value={l.id}>
+                    {l.name}
+                  </option>
+                ))}
+              </select>
+              {newLabelOpen ? (
+                <>
+                  <input
+                    type="text"
+                    autoFocus
+                    placeholder="New label"
+                    value={newLabelName}
+                    onChange={(e) => setNewLabelName(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && createLabel()}
+                    style={{ width: 140 }}
+                  />
+                  <button
+                    className="btn sm ghost"
+                    disabled={addingLabel || !newLabelName.trim()}
+                    onClick={createLabel}
+                  >
+                    {addingLabel ? 'Adding…' : 'Add'}
+                  </button>
+                </>
+              ) : (
+                <button className="btn sm ghost" onClick={() => setNewLabelOpen(true)}>
+                  + new label
+                </button>
+              )}
+            </span>
+          ) : (
+            t.labelName && (
+              <span>
+                <b>Label</b> <Badge tone="accent">{t.labelName}</Badge>
+              </span>
+            )
+          )}
           {t.verifierName && (
             <span>
               <b>Checked by</b> {t.verifierName}
@@ -387,41 +490,65 @@ export default function TaskDetail() {
           />
         </Card>
 
+        {/* A running log, not a text box that gets overwritten — a daily
+            update from three weeks ago is worth exactly as much as today's.
+            Anybody who can see the task can add to it, the owner logging
+            progress and the CEO leaving a comment through the same door. */}
         <Card
-          title="Notes"
-          hint={canEditNotes ? 'the owner keeps this current' : undefined}
-          action={
-            canEditNotes && notesChanged ? (
+          title="Notes & updates"
+          hint="a dated log — the owner's daily progress, and anyone else's comments"
+          collapsible
+          defaultCollapsed={false}
+          id="task-notes"
+        >
+          <div className="stack" style={{ gap: 12 }}>
+            {(!data.notes || data.notes.length === 0) && (
+              <div className="small muted">Nothing logged yet.</div>
+            )}
+            {data.notes && data.notes.length > 0 && (
+              <div className="log">
+                {data.notes.map((n) => (
+                  <div key={n.id} className="hist">
+                    <span className="hist-dot" aria-hidden="true">
+                      ✎
+                    </span>
+                    <div className="hist-main">
+                      <div className="hist-head">
+                        <span className="strong">{n.authorName}</span>
+                        <span className="muted"> on {dateLabel(n.entryDate)}</span>
+                        <span className="small muted" style={{ marginLeft: 'auto' }}>
+                          logged {relativeTime(n.createdAt)}
+                        </span>
+                      </div>
+                      <div className="hist-note">{n.body}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="grid cols-2" style={{ gap: 10, alignItems: 'end' }}>
+              <Field label="Date this update is about">
+                <input type="date" value={noteDate} max={today()} onChange={(e) => setNoteDate(e.target.value)} />
+              </Field>
+              <div />
+            </div>
+            <textarea
+              value={noteBody}
+              onChange={(e) => setNoteBody(e.target.value)}
+              rows={3}
+              placeholder="Progress, a blocker, a comment for whoever reads this next."
+            />
+            <div>
               <button
                 className="btn sm primary"
-                disabled={savingNotes}
-                onClick={async () => {
-                  setSavingNotes(true);
-                  try {
-                    await api.patch(`/tasks/${id}`, { notes });
-                    await load();
-                  } catch (err) {
-                    setError(err);
-                  } finally {
-                    setSavingNotes(false);
-                  }
-                }}
+                disabled={addingNote || !noteBody.trim()}
+                onClick={addNote}
               >
-                {savingNotes ? 'Saving…' : 'Save notes'}
+                {addingNote ? 'Adding…' : 'Add to the log'}
               </button>
-            ) : null
-          }
-        >
-          {canEditNotes ? (
-            <textarea
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-              rows={4}
-              placeholder="Context, links, blockers, what done looks like."
-            />
-          ) : (
-            <div className="prose">{t.notes || <span className="muted">No notes.</span>}</div>
-          )}
+            </div>
+          </div>
         </Card>
 
         <Card
@@ -513,6 +640,7 @@ export default function TaskDetail() {
           task={t}
           people={people}
           clients={clients}
+          labels={labels}
           onClose={() => setEditing(false)}
           onSaved={load}
         />

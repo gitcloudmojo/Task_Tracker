@@ -233,19 +233,23 @@ export default function Settings() {
 
         <Card title="How the chain works" collapsible defaultCollapsed id="set-chain">
           <div className="small" style={{ color: 'var(--ink-secondary)', lineHeight: 1.7 }}>
-            You submit a task when you consider it done. An admin verifies it — checking the work,
-            not just the box — and then the CEO gives the final approval. Either reviewer can send
-            it back, and they have to say why; the reason lands on your task and in your alerts.
+            You submit a task when you consider it done. A manager checks it — the work, not just the
+            box — and that check is the final sign-off; there is no further approval waiting behind
+            it. A manager can send it back instead, and has to say why; the reason lands on your task
+            and in your alerts.
             <br />
             <br />
-            Nobody reviews their own work. If an admin owns a task, another admin or the CEO has to
-            verify it. The one exception is a task the CEO owns: with nobody above them, an admin's
-            verification completes it, and the record says so.
+            Nobody reviews their own work — if a manager owns a task, another manager (or the CEO,
+            for a manager's own task) checks it instead.
             <br />
             <br />
-            Alerts watch three things: your completion dates, submissions nobody has verified, and
-            verified work nobody has approved. The last two matter because from a client's point of
-            view a task stuck in a review queue is just as late as one nobody started.
+            The CEO sees every task, filed under whatever label a manager has put on it, and can
+            leave a comment on any of them — but does not need to act for a task to be finished.
+            <br />
+            <br />
+            Alerts watch two things: your completion dates, and submissions nobody has checked yet.
+            A submission stuck unchecked matters because, from a client's point of view, a task
+            waiting in a review queue is just as late as one nobody started.
           </div>
         </Card>
       </div>

@@ -21,7 +21,6 @@ const VIEWS = [
   { value: 'live', label: 'Live' },
   { value: 'overdue', label: 'Late' },
   { value: 'submitted', label: 'To check' },
-  { value: 'verified', label: 'To approve' },
   { value: 'approved', label: 'Approved' },
   { value: 'all', label: 'All' },
 ];
@@ -30,6 +29,11 @@ const GROUPS = [
   { key: 'byPerson', label: 'By person' },
   { key: 'byClient', label: 'By client' },
   { key: 'byTeam', label: 'By team' },
+  // Grouped by project rather than by person, so the same label — spread
+  // across whoever is doing each piece — reads as one row. A row is
+  // clickable here in a way the others are not: this is the one grouping
+  // that already has a matching filter to jump straight into.
+  { key: 'byLabel', label: 'By label' },
 ];
 
 export default function Tasks() {
@@ -39,15 +43,21 @@ export default function Tasks() {
   const [dash, setDash] = useState(null);
   const [people, setPeople] = useState([]);
   const [clients, setClients] = useState([]);
+  const [labels, setLabels] = useState([]);
   const [error, setError] = useState(null);
   const [creating, setCreating] = useState(false);
   const [importing, setImporting] = useState(false);
   const [group, setGroup] = useState('byPerson');
+  const [newLabel, setNewLabel] = useState('');
+  const [addingLabel, setAddingLabel] = useState(false);
 
   const [view, setView] = useState(params.get('view') || 'live');
   const [owner, setOwner] = useState(params.get('owner') || '');
   const [client, setClient] = useState('');
+  const [label, setLabel] = useState(params.get('label') || '');
   const [search, setSearch] = useState('');
+
+  const loadLabels = () => api.get('/labels').then((d) => setLabels(d.labels)).catch(() => {});
 
   const load = () => {
     const q = { limit: 300 };
@@ -58,6 +68,7 @@ export default function Tasks() {
     } else if (view !== 'all') q.status = view;
     if (owner) q.ownerId = owner;
     if (client) q.client = client;
+    if (label) q.label = label;
     if (search) q.q = search;
     api
       .get(`/tasks${qs(q)}`)
@@ -66,7 +77,7 @@ export default function Tasks() {
     api.get('/dashboard').then(setDash).catch(() => {});
   };
 
-  useEffect(load, [view, owner, client]);
+  useEffect(load, [view, owner, client, label]);
 
   useEffect(() => {
     const id = setTimeout(load, 250);
@@ -76,7 +87,24 @@ export default function Tasks() {
   useEffect(() => {
     api.get('/users').then((d) => setPeople(d.users)).catch(() => {});
     api.get('/tasks/clients').then((d) => setClients(d.clients)).catch(() => {});
+    loadLabels();
   }, []);
+
+  const createLabel = async () => {
+    if (!newLabel.trim()) return;
+    setAddingLabel(true);
+    setError(null);
+    try {
+      const d = await api.post('/labels', { name: newLabel.trim() });
+      setNewLabel('');
+      await loadLabels();
+      setLabel(String(d.label.id));
+    } catch (err) {
+      setError(err);
+    } finally {
+      setAddingLabel(false);
+    }
+  };
 
   useEffect(() => {
     const next = new URLSearchParams(params);
@@ -84,8 +112,10 @@ export default function Tasks() {
     else next.set('view', view);
     if (owner) next.set('owner', owner);
     else next.delete('owner');
+    if (label) next.set('label', label);
+    else next.delete('label');
     setParams(next, { replace: true });
-  }, [view, owner]);
+  }, [view, owner, label]);
 
   const t = dash?.totals;
   const rows = dash?.[group] || [];
@@ -95,7 +125,7 @@ export default function Tasks() {
       title="All tasks"
       subtitle={
         t
-          ? `${t.all} in total · ${t.live} live · ${t.overdue} late · ${dash.stalls.withVerifier} to check · ${dash.stalls.withApprover} to approve`
+          ? `${t.all} in total · ${t.live} live · ${t.overdue} late · ${dash.stalls.withVerifier} to check`
           : undefined
       }
       actions={
@@ -138,6 +168,17 @@ export default function Tasks() {
               </option>
             ))}
           </select>
+          {/* Click a label, see every task under it — whoever it's assigned
+              to — with each one's own status. That is the whole feature. */}
+          <select value={label} onChange={(e) => setLabel(e.target.value)} style={{ maxWidth: 200 }}>
+            <option value="">Any label</option>
+            <option value="none">No label</option>
+            {labels.map((l) => (
+              <option key={l.id} value={l.id}>
+                {l.name} ({l.liveCount})
+              </option>
+            ))}
+          </select>
           <input
             type="text"
             placeholder="Search name, client or notes…"
@@ -146,6 +187,22 @@ export default function Tasks() {
             style={{ maxWidth: 240 }}
           />
         </div>
+
+        {can('tasks.edit') && (
+          <div className="row wrap" style={{ gap: 8 }}>
+            <input
+              type="text"
+              placeholder="New label — e.g. a project name"
+              value={newLabel}
+              onChange={(e) => setNewLabel(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && createLabel()}
+              style={{ maxWidth: 220 }}
+            />
+            <button className="btn sm ghost" onClick={createLabel} disabled={addingLabel || !newLabel.trim()}>
+              {addingLabel ? 'Adding…' : '+ Add label'}
+            </button>
+          </div>
+        )}
 
         <Card>
           {tasks.length === 0 ? (
@@ -197,7 +254,16 @@ export default function Tasks() {
                 </thead>
                 <tbody>
                   {rows.map((r) => (
-                    <tr key={r.key}>
+                    <tr
+                      key={r.key}
+                      className={group === 'byLabel' ? 'clickable' : undefined}
+                      onClick={
+                        group === 'byLabel'
+                          ? () => setLabel(r.labelId != null ? String(r.labelId) : 'none')
+                          : undefined
+                      }
+                      title={group === 'byLabel' ? `See every task under ${r.key}` : undefined}
+                    >
                       <td className="strong">{r.key}</td>
                       <td className="num">{r.live}</td>
                       <td>
@@ -240,7 +306,13 @@ export default function Tasks() {
       </div>
 
       {creating && (
-        <TaskModal people={people} clients={clients} onClose={() => setCreating(false)} onSaved={load} />
+        <TaskModal
+          people={people}
+          clients={clients}
+          labels={labels}
+          onClose={() => setCreating(false)}
+          onSaved={load}
+        />
       )}
 
       {importing && (

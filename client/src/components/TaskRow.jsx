@@ -25,7 +25,14 @@ export default function TaskRow({
   onError,
 }) {
   const s = STATUS[t.status] || STATUS.open;
-  const due = dueLabel(t.daysToDue, t.status);
+  const due = dueLabel(t.daysToDue, t.status, t.lateSide);
+  // Red is reserved for lateness that is genuinely the owner's — work nobody
+  // has started or finished past its date. Once the owner has done their
+  // part and it is just sitting with a reviewer, the row still says so, but
+  // calmly: see dueLabel's comment for why painting both the same red was a
+  // bug people were right to notice.
+  const ownerLate = t.isOverdue && t.lateSide === 'owner';
+  const reviewLate = t.isOverdue && t.lateSide && t.lateSide !== 'owner';
   /**
    * The next unfinished dated step — but only when there is something to say
    * about it. A row that names the next step on every task doubles its own
@@ -37,7 +44,7 @@ export default function TaskRow({
   const next = nextDue && (nextDue.tone === 'critical' || nextDue.tone === 'warning') ? nextDue : null;
 
   return (
-    <div className={`t-row${t.isOverdue ? ' overdue' : ''}`}>
+    <div className={`t-row${ownerLate ? ' overdue' : reviewLate ? ' review-late' : ''}`}>
       <div className="t-main">
         <Link to={`/tasks/${t.id}`} className="t-name">
           {t.name}
@@ -45,6 +52,7 @@ export default function TaskRow({
         <div className="t-sub">
           <span className="t-client">{t.clientName}</span>
           {showOwner && <span className="muted">· {t.ownerName}</span>}
+          {t.labelName && <Badge tone="accent">{t.labelName}</Badge>}
           {t.priority === 'high' && <span className="flag-high">High</span>}
           {t.returnCount > 0 && t.status !== 'approved' && (
             <span className="flag-back" title={t.returnReason || undefined}>
@@ -98,7 +106,9 @@ export default function TaskRow({
       {/* The completion date is the whole point of a tracker, so it is read
           first: the date itself, then how many days that leaves. */}
       <div className="t-when">
-        <span className={`t-date${due?.tone === 'critical' ? ' late' : ''}`}>
+        <span
+          className={`t-date${due?.tone === 'critical' ? ' late' : due?.tone === 'warning' && t.isOverdue ? ' review-late' : ''}`}
+        >
           {dateLabel(t.completionDate)}
         </span>
         {due ? (

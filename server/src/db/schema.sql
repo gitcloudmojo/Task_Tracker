@@ -2,12 +2,23 @@
 -- A1K Task Tracker — one solution on the A1K platform, by CloudMojo.
 --
 -- One thing this app does: move a piece of work from "assigned" to "signed
--- off", through two pairs of eyes that are not the person who did it.
+-- off", through a pair of eyes that is not the person who did it.
 --
---   open  --submit-->  submitted  --verify-->  verified  --approve-->  approved
---                          |                      |
---                          +------ return --------+---> back to open, with a
---                                                       reason on the record
+--   open  --submit-->  submitted  --verify-->  approved
+--             |
+--             +------ return ------> back to open, with a reason on the record
+--
+-- A manager's "verify" (confirming the work came back done) IS the sign-off —
+-- there is no further gate above it. This used to run through a third state,
+-- `verified`, that sat waiting for the CEO to separately approve; that step
+-- was retired so nobody's finished work sits idle for a second reviewer. The
+-- CEO keeps full visibility (every task, bifurcated by label — see `labels`
+-- below) and can comment on anything, but does not hold up the chain. The
+-- `verified` value stays legal in `status` and every verified_*/approved_*
+-- column stays in place, both because they still describe what a manager's
+-- check found, and because it keeps old rows readable exactly as they were
+-- written before this change (see db/index.js's `patch()` for the one-time
+-- migration that closed out tasks caught mid-flight).
 --
 -- Everything else here exists to serve that: who may push which transition,
 -- what the state was before, and why somebody sent it back.
@@ -45,6 +56,29 @@ CREATE TABLE IF NOT EXISTS users (
 );
 
 -- ---------------------------------------------------------------------------
+-- Labels.
+--
+-- The answer to "these five tasks, for four different people, are really one
+-- engagement" — a manager's own grouping, set on the task at creation or
+-- edit time, so the CEO can click one label and see every task under it
+-- (with each one's own status) regardless of who is doing it. Deliberately a
+-- single nullable column on `tasks` rather than a join table: one project per
+-- task covers the case this was asked for, and it is the simpler thing to
+-- query, filter and reason about. Only a manager (or Super Admin) may create
+-- one or put it on a task — see access.js, where this rides on `tasks.edit` —
+-- and deleting a label just clears it off whatever it was on (ON DELETE SET
+-- NULL below), never the tasks themselves.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS labels (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  name        TEXT    NOT NULL UNIQUE,
+  color       TEXT,
+  created_by  INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+  updated_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+-- ---------------------------------------------------------------------------
 -- Tasks.
 --
 -- `status` is the single source of truth for where a task is in the chain.
@@ -68,6 +102,14 @@ CREATE TABLE IF NOT EXISTS tasks (
   -- with everything marked urgent.
   priority        TEXT    NOT NULL DEFAULT 'normal' CHECK (priority IN ('high','normal')),
   notes           TEXT,
+
+  -- The project (or whatever grouping a manager finds useful) this task
+  -- belongs to. Nullable and manager-only to set (see access.js — it rides on
+  -- `tasks.edit`, same as every other field a manager alone may change): a
+  -- team member's own self-created task is never labelled, because deciding
+  -- which project a piece of work belongs to is a manager's call, not the
+  -- person doing it. See the `labels` table below for the reasoning.
+  label_id        INTEGER REFERENCES labels(id) ON DELETE SET NULL,
 
   status          TEXT    NOT NULL DEFAULT 'open'
                   CHECK (status IN ('open','submitted','verified','approved','cancelled')),
@@ -103,6 +145,7 @@ CREATE TABLE IF NOT EXISTS tasks (
 CREATE INDEX IF NOT EXISTS idx_tasks_owner  ON tasks(owner_id, status);
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status, completion_date);
 CREATE INDEX IF NOT EXISTS idx_tasks_client ON tasks(client_name);
+CREATE INDEX IF NOT EXISTS idx_tasks_label  ON tasks(label_id);
 
 -- ---------------------------------------------------------------------------
 -- The breakdown: the steps a task is made of.
@@ -152,6 +195,38 @@ CREATE INDEX IF NOT EXISTS idx_steps_task  ON task_steps(task_id, position, id);
 -- Owner + done is the index behind "what steps are on my plate", which the
 -- sweep asks once per run and Home asks on every visit.
 CREATE INDEX IF NOT EXISTS idx_steps_owner ON task_steps(owner_id, done_at);
+
+-- ---------------------------------------------------------------------------
+-- Notes — a task's running log of updates and comments.
+--
+-- Not a single field on `tasks` any more: a status line from three weeks ago
+-- is worth exactly as much as today's, and a text box that gets overwritten
+-- loses it the moment somebody types over it. Each entry is permanent once
+-- added (append-only, like `task_events`, and for the same reason) and
+-- carries two dates that answer two different questions —
+--
+--   entry_date  the day this update is ABOUT, picked from a calendar. Left
+--               to default to today, but a person catching up on yesterday's
+--               progress can backdate it rather than have the log claim they
+--               worked on something today that they actually did yesterday.
+--   created_at  the moment it was actually typed in. Automatic, never
+--               editable — the one fact about a log entry nobody gets to
+--               rewrite.
+--
+-- Anybody who can see a task may add to its log (the same rule `canViewTask`
+-- already enforces for reading one) — the owner logging daily progress, a
+-- manager leaving an instruction, or the CEO leaving a comment without
+-- needing to be able to edit the task itself.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS task_notes (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_id     INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  author_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  body        TEXT    NOT NULL,
+  entry_date  TEXT    NOT NULL,
+  created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_task_notes_task ON task_notes(task_id, entry_date, created_at);
 
 -- ---------------------------------------------------------------------------
 -- Projects.

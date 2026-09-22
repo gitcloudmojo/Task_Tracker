@@ -24,8 +24,12 @@ export const STATUS = {
     icon: '◐',
     waiting: 'the manager',
     short: 'With manager',
-    heldBy: 'with the manager to check',
+    heldBy: 'with the manager to check — checking it is the final word',
   },
+  // Legacy display only: no task reaches this status any more (a manager's
+  // check now completes a task outright — see workflow.js), but a very old,
+  // unmigrated row could in principle still carry it, so the words stay
+  // truthful rather than disappearing.
   verified: {
     label: 'Checked — waiting for approval',
     tone: 'warning',
@@ -67,7 +71,12 @@ export const PIPELINE = ['open', 'submitted', 'verified'];
  */
 export const MOVE = {
   submit: { label: 'Mark done', kind: 'primary' },
-  verify: { label: 'Confirm done', kind: 'primary' },
+  // This used to send a task up to the CEO for a further approval. It is the
+  // final sign-off now, so the button says so.
+  verify: { label: 'Approve', kind: 'primary' },
+  // Dead in the ordinary flow (see workflow.js's `verifyCompletesTask`) but
+  // left wired up rather than torn out — see actionsFor's comment on
+  // `canApprove` for why.
   approve: { label: 'Approve', kind: 'primary' },
   return: { label: 'Send back', kind: '' },
   reopen: { label: 'Reopen', kind: '' },
@@ -177,11 +186,27 @@ export function stepDueLabel(step) {
 /**
  * How a due date reads. Overdue is stated in days late rather than as a date,
  * because "9 days late" lands and "due 15 Aug" needs arithmetic.
+ *
+ * `lateSide` is the server's answer to *whose* lateness this is (see
+ * `overdueState` in workflow.js) — 'owner' while the task is still open and
+ * nobody has done the work, 'verifier' (or, for an old unmigrated row,
+ * 'approver') once the owner has already marked it done and it is sitting
+ * with somebody else. Painting both the same red is the exact bug this
+ * fixes: a person who finished their part on time should never read as late
+ * because somebody downstream has not gotten to it yet. So a task overdue on
+ * anybody's side but the owner's gets the calmer 'warning' tone and its own
+ * wording — still visible, never hidden, just no longer blaming the person
+ * who is actually done.
  */
-export function dueLabel(days, status) {
+export function dueLabel(days, status, lateSide) {
   if (status === 'approved' || status === 'cancelled') return null;
   if (days === null || days === undefined) return null;
-  if (days < 0) return { text: `${Math.abs(days)}d late`, tone: 'critical' };
+  if (days < 0) {
+    if (lateSide && lateSide !== 'owner') {
+      return { text: `done — ${Math.abs(days)}d overdue for review`, tone: 'warning' };
+    }
+    return { text: `${Math.abs(days)}d late`, tone: 'critical' };
+  }
   if (days === 0) return { text: 'due today', tone: 'warning' };
   if (days === 1) return { text: 'due tomorrow', tone: 'warning' };
   if (days <= 7) return { text: `in ${days}d`, tone: '' };

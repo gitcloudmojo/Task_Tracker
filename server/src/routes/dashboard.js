@@ -20,8 +20,10 @@ router.get(
 
     const rows = await db
       .prepare(
-        `SELECT t.*, o.name AS owner_name, o.team AS owner_team
-           FROM tasks t JOIN users o ON o.id = t.owner_id
+        `SELECT t.*, o.name AS owner_name, o.team AS owner_team, l.name AS label_name
+           FROM tasks t
+           JOIN users o ON o.id = t.owner_id
+           LEFT JOIN labels l ON l.id = t.label_id
           WHERE ${S.sql}`
       )
       .all(...S.params);
@@ -66,6 +68,7 @@ router.get(
     let byPerson = [];
     let byClient = [];
     let byTeam = [];
+    let byLabel = [];
     if (can(req.user, 'tasks.view_all')) {
       const group = (keyFn) => {
         const map = new Map();
@@ -87,6 +90,32 @@ router.get(
       byPerson = group((t) => t.owner_name);
       byClient = group((t) => t.client_name);
       byTeam = group((t) => t.owner_team);
+
+      // Grouped by label rather than by person or client, so the same
+      // project — however many people it's spread across — reads as one
+      // row. Keyed on label_id (not just the name) so the client can filter
+      // the task list by clicking through, the same id the label filter on
+      // the task list already uses; tasks with no label collect under a
+      // dedicated "No label" bucket rather than being dropped.
+      const byLabelMap = new Map();
+      for (const t of rows) {
+        const mapKey = t.label_id ?? 'none';
+        const e =
+          byLabelMap.get(mapKey) ||
+          {
+            key: t.label_name || 'No label',
+            labelId: t.label_id ?? null,
+            live: 0, overdue: 0, awaitingReview: 0, awaitingApproval: 0, approved: 0, total: 0,
+          };
+        e.total += 1;
+        if (['open', 'submitted', 'verified'].includes(t.status)) e.live += 1;
+        if (overdueState(t).overdue) e.overdue += 1;
+        if (t.status === 'submitted') e.awaitingReview += 1;
+        if (t.status === 'verified') e.awaitingApproval += 1;
+        if (t.status === 'approved') e.approved += 1;
+        byLabelMap.set(mapKey, e);
+      }
+      byLabel = [...byLabelMap.values()].sort((a, b) => b.live - a.live || b.total - a.total);
     }
 
     const attention = live
@@ -168,6 +197,7 @@ router.get(
       byPerson,
       byClient,
       byTeam,
+      byLabel,
       attention,
       generatedFor: today(),
     });

@@ -132,14 +132,18 @@ async function patch() {
   if (!taskColumns.includes('reassign_count')) {
     await client.execute('ALTER TABLE tasks ADD COLUMN reassign_count INTEGER NOT NULL DEFAULT 0');
   }
+  if (!taskColumns.includes('label_id')) {
+    await client.execute('ALTER TABLE tasks ADD COLUMN label_id INTEGER REFERENCES labels(id) ON DELETE SET NULL');
+  }
   if (!(await columns('notifications')).includes('snoozed_until')) {
     await client.execute('ALTER TABLE notifications ADD COLUMN snoozed_until TEXT');
   }
 
-  // The breakdown. A whole table rather than a column, so it arrives by way of
-  // schema.sql's CREATE TABLE IF NOT EXISTS on an existing database too —
-  // nothing to do here but say so, and check, because a silent assumption about
-  // which tables exist is how a migration goes wrong.
+  // The breakdown, projects, labels, the notes log. Whole tables rather than
+  // columns, so each arrives by way of schema.sql's CREATE TABLE IF NOT
+  // EXISTS on an existing database too — nothing to do here but say so, and
+  // check, because a silent assumption about which tables exist is how a
+  // migration goes wrong.
   const tables = (
     await client.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
   ).rows.map((t) => t.name);
@@ -148,6 +152,94 @@ async function patch() {
   }
   if (!tables.includes('projects')) {
     throw new Error('projects is missing — schema.sql did not run. The database may be read-only.');
+  }
+  if (!tables.includes('labels')) {
+    throw new Error('labels is missing — schema.sql did not run. The database may be read-only.');
+  }
+  if (!tables.includes('task_notes')) {
+    throw new Error('task_notes is missing — schema.sql did not run. The database may be read-only.');
+  }
+
+  await closeOutStaleApprovals();
+  await carryForwardLegacyNotes();
+}
+
+/**
+ * One-time data fix for the day the CEO approval gate was retired.
+ *
+ * Before that change, a task sat in `verified` — checked by a manager, still
+ * waiting on the CEO — until somebody with `tasks.approve` clicked once more.
+ * Any task still sitting there when this ships was caught mid-flight by a
+ * rule that no longer applies, so it is closed out the same way the code now
+ * closes out every new one: a manager's verification is the final word.
+ * Attributed to whoever verified it (the only person who touched it), with a
+ * note on the task and a line in its history explaining why an "approved"
+ * entry appears with nobody having clicked "approve". Guarded by the WHERE
+ * clause alone — once a row is moved to `approved` it no longer matches, so
+ * this is safe to run on every boot, same as the rest of `patch()`.
+ */
+async function closeOutStaleApprovals() {
+  const stale = (
+    await client.execute("SELECT id, verified_at, verified_by FROM tasks WHERE status = 'verified'")
+  ).rows;
+  for (const t of stale) {
+    const stamp = t.verified_at || nowSql();
+    await client.execute({
+      sql: `UPDATE tasks SET status = 'approved', approved_at = ?, approved_by = ?, approved_note = ? WHERE id = ?`,
+      args: [
+        stamp,
+        t.verified_by ?? null,
+        'Auto-approved: a manager’s verification is now the final sign-off, so this no longer waits on the CEO.',
+        t.id,
+      ],
+    });
+    await client.execute({
+      sql: `INSERT INTO task_events (task_id, actor_id, action, from_status, to_status, note, created_at)
+            VALUES (?,?,?,?,?,?,?)`,
+      // actor_id is NOT NULL and has no sensible "the system did this" value —
+      // attributed to whoever verified it, since their check is what this
+      // migration is now treating as the sign-off.
+      args: [
+        t.id,
+        t.verified_by,
+        'approved',
+        'verified',
+        'approved',
+        'Workflow change: verification now completes a task, so this — caught mid-flight — was closed out rather than left waiting on an approval step that no longer exists.',
+        nowSql(),
+      ],
+    });
+  }
+}
+
+/**
+ * One-time data carry-forward for the day the single `notes` field became a
+ * dated log (`task_notes`). A task's existing note is not discarded — it
+ * becomes that task's first log entry, attributed to whoever created the
+ * task (the only author a single free-text field ever recorded) and dated to
+ * the task's last update, which is the closest fact the old column kept to
+ * "when was this written". Guarded by the `NOT EXISTS` below rather than a
+ * one-off flag: once a task has at least one log entry this no longer
+ * matches it, so — like the rest of `patch()` — it is safe to run every boot.
+ * The old `notes` column is left in place afterward (untouched, not read by
+ * the app any more) rather than dropped, so nothing here is destructive.
+ */
+async function carryForwardLegacyNotes() {
+  const legacy = (
+    await client.execute(
+      `SELECT t.id, t.notes, t.created_by, t.updated_at FROM tasks t
+        WHERE t.notes IS NOT NULL AND trim(t.notes) <> ''
+          AND NOT EXISTS (SELECT 1 FROM task_notes n WHERE n.task_id = t.id)`
+    )
+  ).rows;
+  for (const t of legacy) {
+    const stamp = t.updated_at || nowSql();
+    const entryDate = String(stamp).slice(0, 10);
+    await client.execute({
+      sql: `INSERT INTO task_notes (task_id, author_id, body, entry_date, created_at)
+            VALUES (?,?,?,?,?)`,
+      args: [t.id, t.created_by, t.notes, entryDate, stamp],
+    });
   }
 }
 

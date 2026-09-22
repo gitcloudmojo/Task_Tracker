@@ -1,15 +1,30 @@
 /**
  * The approval chain — the one piece of logic this product exists for.
  *
- *   open ──submit──▶ submitted ──verify──▶ verified ──approve──▶ approved
- *                        │                    │
- *                        └──── return ────────┴──▶ back to open, with a reason
+ *   open ──submit──▶ submitted ──verify──▶ approved
+ *                        │
+ *                        └──── return ────▶ back to open, with a reason
  *
- * Same three rules as the on-prem edition (nobody signs off their own work).
- * The only change for the Vercel/Turso edition: every function that queries
- * the database is `async` now, which cascades to `actionsFor` (it calls
- * `canCheck`) and therefore to every route that shapes a task — those all
- * `await actionsFor(...)` now instead of calling it plain.
+ * A manager's verification used to be the middle of three gates, with the
+ * CEO's separate approval as the last one. That last gate was retired: a
+ * task no longer waits on the CEO once the person who is supposed to check
+ * it has done so. The CEO keeps full visibility (see labels, for how they
+ * find their way to a particular slice of the work) and can comment on
+ * anything, but does not hold up the chain — see `verifyCompletesTask` below,
+ * which is the one function that changed, and `db/index.js`'s `patch()` for
+ * the one-time fix that closed out tasks caught mid-flight when this shipped.
+ *
+ * `verified` stays a legal status and the verified_ and approved_ columns
+ * stay exactly as they were, both because a manager's check is still a real,
+ * separately-recorded fact and because old rows read exactly as they always
+ * did — nothing here rewrites history, it only stops adding a state nobody
+ * needs to sit in any more.
+ *
+ * Same one rule as ever: nobody signs off their own work. The only change for
+ * the Vercel/Turso edition: every function that queries the database is
+ * `async` now, which cascades to `actionsFor` (it calls `canCheck`) and
+ * therefore to every route that shapes a task — those all `await
+ * actionsFor(...)` now instead of calling it plain.
  */
 import { db, nowSql, today } from '../db/index.js';
 
@@ -25,7 +40,7 @@ export const STATUS_LABEL = {
 
 export const WAITING_ON = {
   open: 'the owner',
-  submitted: 'the manager to check',
+  submitted: 'the manager to check — checking it is the final sign-off',
   verified: 'the CEO to approve',
   approved: 'nobody — signed off',
   cancelled: 'nobody — cancelled',
@@ -68,25 +83,32 @@ export async function canCheck(task, user, can) {
   return true;
 }
 
-/** Somebody other than this person who could approve. */
-export async function hasOtherApprover(ownerId) {
-  const row = await db
-    .prepare(`SELECT COUNT(*) AS c FROM users WHERE is_active = 1 AND role = 'ceo' AND id <> ?`)
-    .get(ownerId);
-  return row.c > 0;
-}
-
 /**
- * When the owner is the only person who could approve — the CEO's own tasks —
- * verification is the last gate.
+ * Verification is always the last gate now.
+ *
+ * This used to check whether anybody was left to approve after the manager
+ * (true only for the CEO's own tasks, where there was nobody left) and leave
+ * every other task sitting in `verified` for the CEO to separately sign off.
+ * That second gate is gone: a manager's check completes the task outright, so
+ * this is unconditional. Kept as a named function rather than inlined at its
+ * one call site (tasks.js's `/verify` route) so the one thing that changed
+ * when the CEO approval step was retired reads as one small, obviously-true
+ * function instead of a fact buried in a route.
  */
-export async function verifyCompletesTask(task) {
-  return !(await hasOtherApprover(task.owner_id));
+export async function verifyCompletesTask() {
+  return true;
 }
 
 /**
  * What this user may do to this task right now. `await`ed by every caller —
  * it now touches the database (via `canCheck`) instead of being pure.
+ *
+ * `canApprove` (and the `verified` half of `returnOk`) are left exactly as
+ * they were rather than deleted: since `verifyCompletesTask` is now always
+ * true, no task reaches `status === 'verified'` any more, so both are dead in
+ * the ordinary flow — but they cost nothing to keep, and they are the one
+ * thing standing ready should a task ever end up there again (a manual data
+ * fix, a future rule change) instead of that case being unhandled.
  */
 export async function actionsFor(task, user, can) {
   const isOwner = task.owner_id === user.id;

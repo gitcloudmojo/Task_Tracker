@@ -34,6 +34,7 @@ export default function Home() {
   const [steps, setSteps] = useState([]);
   const [people, setPeople] = useState([]);
   const [clients, setClients] = useState([]);
+  const [labels, setLabels] = useState([]);
   const [error, setError] = useState(null);
   const [tab, setTab] = useState(null);
   // Team members reach this page and no other, since /tasks is behind
@@ -63,6 +64,10 @@ export default function Home() {
       api.get('/users').then((d) => setPeople(d.users)).catch(() => {});
       api.get('/tasks/clients').then((d) => setClients(d.clients)).catch(() => {});
     }
+    // Everybody benefits from knowing the label list exists (a team member
+    // sees which project their own tasks are filed under on the row itself),
+    // but only a manager's create modal actually offers to set one.
+    api.get('/labels').then((d) => setLabels(d.labels)).catch(() => {});
   };
 
   useEffect(load, []);
@@ -97,15 +102,20 @@ export default function Home() {
    */
   const tabs = [];
   if (isCeo) {
+    // A manager's check is the final sign-off now (see workflow.js), so
+    // there is nothing left in this queue for the CEO to action — what
+    // replaces it is visibility: what has just been approved, company-wide,
+    // to open and leave a comment on if something looks off.
     tabs.push({
-      key: 'approve',
-      label: 'To approve',
-      count: queue.toApprove.length,
-      rows: queue.toApprove,
-      hint: 'checked by your manager — yours is the final word',
+      key: 'recent',
+      label: 'Recently approved',
+      count: queue.recentlyApproved.length,
+      rows: queue.recentlyApproved,
+      hint: 'signed off by a manager — open one to add a comment',
       showCheck: true,
-      empty: 'Nothing waiting on your approval.',
+      empty: 'Nothing approved recently.',
       showOwner: true,
+      actionable: false,
     });
   }
   if (isManager) {
@@ -176,8 +186,10 @@ export default function Home() {
 
   const active = tabs.find((t) => t.key === tab) || tabs[0];
 
-  // The headline: one sentence naming the single most pressing thing.
-  const onMe = (isCeo ? queue.toApprove.length : 0) + (isManager ? queue.toVerify.length : 0);
+  // The headline: one sentence naming the single most pressing thing. The CEO
+  // no longer has an action queue here (checking is the final word now), so
+  // only a manager's "to check" count counts toward "waiting on you".
+  const onMe = isManager ? queue.toVerify.length : 0;
   const lateMine = myOpen.filter((t) => t.isOverdue).length;
   /**
    * The steps worth interrupting somebody about: late, or a follow-up whose day
@@ -348,8 +360,7 @@ export default function Home() {
             Across the company: {dash.totals.live} live
             {dash.totals.overdue > 0 && <> · <strong className="bad">{dash.totals.overdue} late</strong></>}
             {' · '}
-            {dash.stalls.withOwner} being worked on · {dash.stalls.withVerifier} to check ·{' '}
-            {dash.stalls.withApprover} to approve
+            {dash.stalls.withOwner} being worked on · {dash.stalls.withVerifier} to check
             <Link className="footnote-link" to="/tasks">
               See all tasks →
             </Link>
@@ -358,7 +369,13 @@ export default function Home() {
       </div>
 
       {creating && (
-        <TaskModal people={people} clients={clients} onClose={() => setCreating(false)} onSaved={load} />
+        <TaskModal
+          people={people}
+          clients={clients}
+          labels={labels}
+          onClose={() => setCreating(false)}
+          onSaved={load}
+        />
       )}
 
       {importing && (

@@ -31,6 +31,7 @@ import dashboardRoutes from './routes/dashboard.js';
 import chatRoutes from './routes/chat.js';
 import projectRoutes from './routes/projects.js';
 import taskImportRoutes from './routes/taskImport.js';
+import labelRoutes from './routes/labels.js';
 
 export const app = express();
 app.use(cors({ origin: config.clientOrigin, credentials: true }));
@@ -74,6 +75,7 @@ app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/chat', chatRoutes);
 app.use('/api/projects', projectRoutes);
 app.use('/api/task-import', taskImportRoutes);
+app.use('/api/labels', labelRoutes);
 
 app.use('/api', (req, res) => res.status(404).json({ error: 'No such endpoint' }));
 
