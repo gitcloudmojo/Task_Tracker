@@ -126,7 +126,9 @@ export default function TaskRow({
       {/* The completion date is the whole point of a tracker, so it is read
           first: the date itself, then how many days that leaves. */}
       <div className="t-when">
-        <span className={`t-date${due?.tone === 'critical' ? ' late' : ''}`}>
+        <span
+          className={`t-date${due?.tone === 'critical' ? ' late' : due?.tone === 'warning' && t.isOverdue ? ' review-late' : ''}`}
+        >
           {dateLabel(t.completionDate)}
         </span>
         {due ? (

@@ -114,8 +114,20 @@ export async function migrate() {
   const schema = fs.readFileSync(path.join(here, 'schema.sql'), 'utf8');
   await client.executeMultiple(schema);
   await patch();
-  await migrateApprovalToManager();
-  await migrateNotesToLog();
+  // These two are one-time data backfills, not schema. A request only needs
+  // the tables and columns above, and this runs in front of every request, so
+  // a rejection here would fail every login. Logged loudly, never rethrown —
+  // the lesson of the outage hotfix. Each also guards its own rows.
+  for (const [name, fn] of [
+    ['migrateApprovalToManager', migrateApprovalToManager],
+    ['migrateNotesToLog', migrateNotesToLog],
+  ]) {
+    try {
+      await fn();
+    } catch (err) {
+      console.error(`[migrate] ${name} failed — continuing without it:`, err);
+    }
+  }
 }
 
 /**
@@ -134,6 +146,16 @@ async function patch() {
   if (!taskColumns.includes('reassign_count')) {
     await client.execute('ALTER TABLE tasks ADD COLUMN reassign_count INTEGER NOT NULL DEFAULT 0');
   }
+  if (!taskColumns.includes('label_id')) {
+    await client.execute('ALTER TABLE tasks ADD COLUMN label_id INTEGER REFERENCES labels(id) ON DELETE SET NULL');
+  }
+  // Deliberately not in schema.sql: on a database that already had `tasks`
+  // before label_id existed, CREATE TABLE IF NOT EXISTS there is a no-op, so
+  // an index on label_id would be asked for before the ALTER TABLE above ever
+  // ran — which is exactly what broke production (SQL_INPUT_ERROR: no such
+  // column: label_id). By construction, label_id exists by this line either
+  // way, so the index is safe to create here instead, every time.
+  await client.execute('CREATE INDEX IF NOT EXISTS idx_tasks_label ON tasks(label_id)');
   if (!(await columns('notifications')).includes('snoozed_until')) {
     await client.execute('ALTER TABLE notifications ADD COLUMN snoozed_until TEXT');
   }
@@ -156,12 +178,6 @@ async function patch() {
   }
   if (!tables.includes('task_notes')) {
     throw new Error('task_notes is missing — schema.sql did not run. The database may be read-only.');
-  }
-
-  // Which task a label sits on. Needs `labels` to already exist, which the
-  // schema.sql pass just above guarantees.
-  if (!taskColumns.includes('label_id')) {
-    await client.execute('ALTER TABLE tasks ADD COLUMN label_id INTEGER REFERENCES labels(id) ON DELETE SET NULL');
   }
 
   // Which repeating schedule a task came from, and which occurrence of it.
@@ -214,6 +230,7 @@ async function migrateApprovalToManager() {
   const stamp = nowSql();
 
   for (const t of stuck.rows) {
+   try {
     const approverId = t.verified_by ?? null;
     await client.execute({
       sql: `UPDATE tasks
@@ -235,6 +252,9 @@ async function migrateApprovalToManager() {
         args: [note, stamp, t.id],
       });
     }
+   } catch (err) {
+    console.error(`[migrate] migrateApprovalToManager: skipped task ${t.id}:`, err);
+   }
   }
   console.log(`[migrate] moved ${stuck.rows.length} task(s) stuck at "verified" straight to "approved"`);
 }
@@ -257,12 +277,16 @@ async function migrateNotesToLog() {
   if (!rows.rows.length) return;
 
   for (const t of rows.rows) {
-    const entryDate = String(t.created_at || nowSql()).slice(0, 10);
-    await client.execute({
-      sql: `INSERT INTO task_notes (task_id, author_id, body, entry_date, created_at)
-            VALUES (?,?,?,?,?)`,
-      args: [t.id, t.created_by, t.notes, entryDate, t.created_at || nowSql()],
-    });
+    try {
+      const entryDate = String(t.created_at || nowSql()).slice(0, 10);
+      await client.execute({
+        sql: `INSERT INTO task_notes (task_id, author_id, body, entry_date, created_at)
+              VALUES (?,?,?,?,?)`,
+        args: [t.id, t.created_by, t.notes, entryDate, t.created_at || nowSql()],
+      });
+    } catch (err) {
+      console.error(`[migrate] migrateNotesToLog: skipped task ${t.id}:`, err);
+    }
   }
   console.log(`[migrate] logged the original notes on ${rows.rows.length} task(s) as their first update`);
 }
