@@ -99,6 +99,8 @@ async function shape(t, user) {
     labelId: t.label_id,
     labelName: t.label_name,
     labelColor: t.label_color,
+    recurringId: t.recurring_id ?? null,
+    occurrenceDate: t.occurrence_date ?? null,
     noteCount: t.note_count,
     daysToDue: daysToDue(t.completion_date),
     isOverdue: od.overdue,
@@ -179,6 +181,16 @@ router.get(
         where.push('t.label_id = ?');
         params.push(Number(req.query.label));
       }
+    }
+    // 'yes' = only tasks a repeating schedule made, 'no' = only one-offs, or a
+    // schedule's id to see just that schedule's tasks.
+    if (req.query.recurring === 'yes') {
+      where.push('t.recurring_id IS NOT NULL');
+    } else if (req.query.recurring === 'no') {
+      where.push('t.recurring_id IS NULL');
+    } else if (req.query.recurring) {
+      where.push('t.recurring_id = ?');
+      params.push(Number(req.query.recurring));
     }
     const wantOverdue = req.query.overdue === 'true';
 
@@ -365,6 +377,18 @@ router.post(
       );
 
     const id = info.lastInsertRowid;
+    // The note typed at creation is also the first entry in the dated log.
+    // (The boot-time migration only does this for notes that already existed
+    // before the log did — without this, a new task's first note would not
+    // show in its log until the next cold start.)
+    if (req.body.notes && String(req.body.notes).trim()) {
+      await db
+        .prepare(
+          `INSERT INTO task_notes (task_id, author_id, body, entry_date, created_at)
+           VALUES (?,?,?,?,?)`
+        )
+        .run(id, req.user.id, String(req.body.notes).trim(), today(), stamp);
+    }
     await record({
       taskId: id,
       actorId: req.user.id,

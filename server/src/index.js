@@ -32,6 +32,8 @@ import chatRoutes from './routes/chat.js';
 import projectRoutes from './routes/projects.js';
 import taskImportRoutes from './routes/taskImport.js';
 import labelRoutes from './routes/labels.js';
+import recurringRoutes from './routes/recurring.js';
+import { generateRecurringThrottled } from './services/recurring.js';
 
 export const app = express();
 app.use(cors({ origin: config.clientOrigin, credentials: true }));
@@ -40,7 +42,13 @@ app.use(express.json({ limit: '1mb' }));
 // Every request first waits on the schema existing — cheap once warm, since
 // ensureMigrated() only actually runs migrate() once per cold start.
 app.use((req, res, next) => {
-  ensureMigrated().then(() => next(), next);
+  ensureMigrated()
+    // Repeating tasks that have come due get created here at most once an
+    // hour per instance (it never throws — see services/recurring.js), so a
+    // cold start or a local server catches up without waiting for the daily
+    // cron.
+    .then(() => generateRecurringThrottled())
+    .then(() => next(), next);
 });
 
 app.get(
@@ -76,6 +84,7 @@ app.use('/api/chat', chatRoutes);
 app.use('/api/projects', projectRoutes);
 app.use('/api/task-import', taskImportRoutes);
 app.use('/api/labels', labelRoutes);
+app.use('/api/recurring', recurringRoutes);
 
 app.use('/api', (req, res) => res.status(404).json({ error: 'No such endpoint' }));
 

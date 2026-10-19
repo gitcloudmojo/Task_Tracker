@@ -308,6 +308,15 @@ export default function TaskDetail() {
             </Badge>
             <span className="muted">{s.heldBy}</span>
             {t.labelName && !manageLabels && <span className="flag-label">{t.labelName}</span>}
+            {t.recurringId && (
+              <Link
+                to="/recurring"
+                className="flag-repeat"
+                title="This task was created by a repeating schedule"
+              >
+                ↻ repeating · {dateLabel(t.occurrenceDate)}
+              </Link>
+            )}
             {manageLabels && (
               <LabelPicker value={t.labelId} onChange={setLabel} disabled={savingLabel} />
             )}

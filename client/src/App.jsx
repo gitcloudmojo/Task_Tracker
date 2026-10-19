@@ -7,6 +7,7 @@ import TaskDetail from './pages/TaskDetail.jsx';
 import Chat from './pages/Chat.jsx';
 import Team from './pages/Team.jsx';
 import Projects from './pages/Projects.jsx';
+import Recurring from './pages/Recurring.jsx';
 import Settings from './pages/Settings.jsx';
 
 function Shell() {
@@ -35,6 +36,10 @@ function Shell() {
       <Route path="/chat/:userId" element={<Chat />} />
       <Route path="/team" element={guard('team.view', <Team />)} />
       <Route path="/projects" element={guard('projects.view', <Projects />)} />
+      {/* Everybody: a team member keeps their own repeating tasks here, a
+          manager everyone's, the CEO reads them. The API decides what each
+          person sees and may change. */}
+      <Route path="/recurring" element={<Recurring />} />
       <Route path="/settings" element={<Settings />} />
       {/* The screens that folded into the ones above. Old links still work. */}
       <Route path="/mine" element={home} />

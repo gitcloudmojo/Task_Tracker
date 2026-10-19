@@ -11,10 +11,23 @@ import { useAuth } from '../lib/auth.jsx';
 import { Modal, Field, ErrorBanner, Segmented } from './ui.jsx';
 import FilePicker from './FilePicker.jsx';
 import LabelPicker from './LabelPicker.jsx';
+import ScheduleFields from './ScheduleFields.jsx';
+import { emptySchedule, scheduleFromRule } from '../lib/recurring.js';
 
 const today = () => new Date().toISOString().slice(0, 10);
 
-export default function TaskModal({ task, people, clients, onClose, onSaved }) {
+/**
+ * Four jobs, one form — they share every field except the dates:
+ *   - a new task                     (no props)
+ *   - editing a task                 (`task`)
+ *   - a new repeating task           (pick Daily / Weekly / Monthly under "Repeat",
+ *                                     or open it with `startRepeating`)
+ *   - editing a repeating schedule   (`schedule`)
+ * A repeating task replaces the single completion date with "how often" and
+ * "due N days after each one appears" — see ScheduleFields and
+ * services/recurring.js on the server.
+ */
+export default function TaskModal({ task, schedule: rule, startRepeating, people, clients, onClose, onSaved }) {
   const { user, can } = useAuth();
   // `tasks.create` is "for anyone" (Manager, Super Admin); a team member holds
   // only `tasks.create_own` and never sees the owner picker at all — there is
@@ -22,16 +35,27 @@ export default function TaskModal({ task, people, clients, onClose, onSaved }) {
   const assignOthers = can('tasks.create');
   const manageLabels = can('labels.manage');
   const editing = Boolean(task);
-  const [name, setName] = useState(task?.name || '');
-  const [clientName, setClientName] = useState(task?.clientName || '');
-  const [ownerId, setOwnerId] = useState(task?.ownerId || (assignOthers ? '' : user.id));
+  const src = task || rule;
+  const [name, setName] = useState(src?.name || '');
+  const [clientName, setClientName] = useState(src?.clientName || '');
+  const [ownerId, setOwnerId] = useState(src?.ownerId || (assignOthers ? '' : user.id));
   const [completionDate, setCompletionDate] = useState(task?.completionDate || '');
-  const [priority, setPriority] = useState(task?.priority || 'normal');
-  const [notes, setNotes] = useState(task?.notes || '');
-  const [labelId, setLabelId] = useState(task?.labelId || null);
+  const [priority, setPriority] = useState(src?.priority || 'normal');
+  const [notes, setNotes] = useState(src?.notes || '');
+  const [labelId, setLabelId] = useState(src?.labelId || null);
+  const [sched, setSched] = useState(
+    rule
+      ? scheduleFromRule(rule)
+      : startRepeating
+        ? emptySchedule('weekly')
+        : { ...emptySchedule('weekly'), frequency: 'none' }
+  );
   const [files, setFiles] = useState([]);
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
+
+  // Repeating = editing a schedule, or creating one by choosing a rhythm.
+  const repeating = Boolean(rule) || (!editing && sched.frequency !== 'none');
 
   // A brand-new task defaults to a week out — far enough to be plausible,
   // near enough that somebody will change it if it matters.
@@ -44,12 +68,41 @@ export default function TaskModal({ task, people, clients, onClose, onSaved }) {
   }, []);
 
   const ready =
-    name.trim().length >= 3 && clientName.trim() && ownerId && completionDate;
+    name.trim().length >= 3 &&
+    clientName.trim() &&
+    ownerId &&
+    (repeating
+      ? (sched.frequency !== 'weekly' || sched.weekdays.length > 0) && sched.dueAfterDays !== ''
+      : completionDate);
 
   const save = async () => {
     setBusy(true);
     setError(null);
     try {
+      if (repeating) {
+        const body = {
+          name: name.trim(),
+          clientName: clientName.trim(),
+          ownerId: Number(ownerId),
+          priority,
+          notes: notes.trim() || null,
+          frequency: sched.frequency,
+          weekdays: sched.weekdays,
+          monthDay: sched.monthDay,
+          dueAfterDays: Number(sched.dueAfterDays),
+          endDate: sched.endDate || null,
+        };
+        if (manageLabels) body.labelId = labelId || null;
+        if (rule) {
+          await api.patch(`/recurring/${rule.id}`, body);
+        } else {
+          if (sched.startDate) body.startDate = sched.startDate;
+          await api.post('/recurring', body);
+        }
+        onSaved();
+        onClose();
+        return;
+      }
       const payload = {
         name: name.trim(),
         clientName: clientName.trim(),
@@ -95,7 +148,15 @@ export default function TaskModal({ task, people, clients, onClose, onSaved }) {
 
   return (
     <Modal
-      title={editing ? `Edit · ${task.name}` : 'New task'}
+      title={
+        editing
+          ? `Edit · ${task.name}`
+          : rule
+            ? `Edit repeating task · ${rule.name}`
+            : repeating
+              ? 'New repeating task'
+              : 'New task'
+      }
       onClose={onClose}
       wide
       footer={
@@ -104,7 +165,7 @@ export default function TaskModal({ task, people, clients, onClose, onSaved }) {
             Cancel
           </button>
           <button className="btn primary" onClick={save} disabled={busy || !ready}>
-            {busy ? 'Saving…' : editing ? 'Save changes' : 'Create task'}
+            {busy ? 'Saving…' : editing || rule ? 'Save changes' : repeating ? 'Create repeating task' : 'Create task'}
           </button>
         </>
       }
@@ -159,14 +220,16 @@ export default function TaskModal({ task, people, clients, onClose, onSaved }) {
             )}
           </Field>
 
-          <Field label="Completion date *" help="The target for delivery. Alerts key off this.">
-            <input
-              type="date"
-              value={completionDate}
-              min={editing ? undefined : today()}
-              onChange={(e) => setCompletionDate(e.target.value)}
-            />
-          </Field>
+          {!repeating && (
+            <Field label="Completion date *" help="The target for delivery. Alerts key off this.">
+              <input
+                type="date"
+                value={completionDate}
+                min={editing ? undefined : today()}
+                onChange={(e) => setCompletionDate(e.target.value)}
+              />
+            </Field>
+          )}
 
           <Field label="Priority" help="Two levels on purpose — four ends up with everything urgent.">
             <Segmented
@@ -189,10 +252,23 @@ export default function TaskModal({ task, people, clients, onClose, onSaved }) {
           )}
         </div>
 
+        {/* Where "Repeat" lives: right under the fields every task has, so
+            "does this come round again?" is part of describing the work. On
+            the edit screen of an existing task there is nothing to choose —
+            a task is one occurrence; its schedule is edited on the Repeating
+            page — so it is not offered. */}
+        {!editing && (
+          <ScheduleFields value={sched} onChange={setSched} allowNone={!rule} editing={Boolean(rule)} />
+        )}
+
         {!editing && (
           <Field
             label="Notes"
-            help="Context, links, what done looks like. Becomes the first entry in the task's update log — the owner adds to it from there as they go."
+            help={
+              repeating
+                ? 'Standing instructions. Copied into the update log of every task this creates.'
+                : "Context, links, what done looks like. Becomes the first entry in the task's update log — the owner adds to it from there as they go."
+            }
           >
             <textarea
               value={notes}
@@ -203,20 +279,31 @@ export default function TaskModal({ task, people, clients, onClose, onSaved }) {
           </Field>
         )}
 
-        <Field
-          label="Attachments"
-          help="The brief, the spec, the client's email — whatever the owner needs to start."
-        >
-          <FilePicker files={files} onChange={setFiles} label="Attach files to this task" />
-        </Field>
+        {/* Files belong to one task; a schedule makes many, so they are not
+            offered here — attach to the task itself once it exists. */}
+        {!repeating && (
+          <Field
+            label="Attachments"
+            help="The brief, the spec, the client's email — whatever the owner needs to start."
+          >
+            <FilePicker files={files} onChange={setFiles} label="Attach files to this task" />
+          </Field>
+        )}
 
-        {!editing && assignOthers && (
+        {repeating && (
+          <div className="notice">
+            Every task this makes goes through the usual flow on its own — the owner submits it, a
+            manager checks and signs it off — so a missed week shows up as a late task, never as an
+            edited date.
+          </div>
+        )}
+        {!editing && !repeating && assignOthers && (
           <div className="notice">
             The owner gets an alert straight away. They submit it when done, and whoever checks
             it signs it off in that same step — no separate approval to wait on afterwards.
           </div>
         )}
-        {!editing && !assignOthers && (
+        {!editing && !repeating && !assignOthers && (
           <div className="notice">
             Submit it when it's done — your manager checking it is the final sign-off, in one
             step.

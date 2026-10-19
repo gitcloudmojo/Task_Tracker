@@ -163,6 +163,28 @@ async function patch() {
   if (!taskColumns.includes('label_id')) {
     await client.execute('ALTER TABLE tasks ADD COLUMN label_id INTEGER REFERENCES labels(id) ON DELETE SET NULL');
   }
+
+  // Which repeating schedule a task came from, and which occurrence of it.
+  // Existing tasks get NULL for both — they are one-offs, which is exactly
+  // what they are. The unique index is what makes generation safe to run
+  // from several places (cron, cold start, the save that created the
+  // schedule) without ever doubling a task up; it only covers rows that
+  // actually came from a schedule.
+  if (!tables.includes('recurring_tasks')) {
+    throw new Error('recurring_tasks is missing — schema.sql did not run. The database may be read-only.');
+  }
+  if (!taskColumns.includes('recurring_id')) {
+    await client.execute(
+      'ALTER TABLE tasks ADD COLUMN recurring_id INTEGER REFERENCES recurring_tasks(id) ON DELETE SET NULL'
+    );
+  }
+  if (!taskColumns.includes('occurrence_date')) {
+    await client.execute('ALTER TABLE tasks ADD COLUMN occurrence_date TEXT');
+  }
+  await client.execute(
+    `CREATE UNIQUE INDEX IF NOT EXISTS uq_tasks_recurring_occurrence
+       ON tasks(recurring_id, occurrence_date) WHERE recurring_id IS NOT NULL`
+  );
 }
 
 /**

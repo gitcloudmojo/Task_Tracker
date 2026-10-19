@@ -13,6 +13,7 @@
  */
 import { ensureMigrated } from '../../server/src/db/index.js';
 import { runAlertSweep } from '../../server/src/services/alerts.js';
+import { generateRecurring } from '../../server/src/services/recurring.js';
 import { config } from '../../server/src/config.js';
 
 export default async function handler(req, res) {
@@ -24,8 +25,11 @@ export default async function handler(req, res) {
   }
   try {
     await ensureMigrated();
+    // Repeating tasks first, so a task that appears this morning is already
+    // there for the sweep below to count and remind about.
+    const recurring = await generateRecurring();
     const result = await runAlertSweep({ verbose: true });
-    res.status(200).json({ ok: true, ...result });
+    res.status(200).json({ ok: true, recurring, ...result });
   } catch (err) {
     console.error('[cron/alerts] sweep failed', err);
     res.status(500).json({ ok: false, error: 'Sweep failed — see function logs' });

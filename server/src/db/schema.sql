@@ -207,6 +207,45 @@ CREATE TABLE IF NOT EXISTS task_notes (
 );
 CREATE INDEX IF NOT EXISTS idx_task_notes_task ON task_notes(task_id, entry_date, id);
 
+-- Repeating tasks. One row is a *schedule*, not a task: each time it comes
+-- round, services/recurring.js creates an ordinary task from it (its own
+-- deadline, its own history, its own check and sign-off), so a missed week
+-- stays visible as a late task instead of being quietly overwritten.
+--
+--   frequency      daily | weekly | monthly. Daily and weekly both work off
+--                  `weekdays` (daily just defaults to all seven); monthly
+--                  works off `month_day`.
+--   weekdays       comma list of ISO weekdays, 1 = Monday … 7 = Sunday.
+--   month_day      '1'..'31', or 'last'. A 31 in a shorter month falls on
+--                  that month's last day rather than being skipped.
+--   due_after_days each task's deadline = the day it appears + this many days.
+--   generated_through
+--                  the last day the generator has already looked at, so a
+--                  day is never scanned twice. Tasks themselves are protected
+--                  separately by a unique (recurring_id, occurrence_date)
+--                  index on `tasks` (created in db/index.js once the columns
+--                  exist), so even a race cannot create the same one twice.
+CREATE TABLE IF NOT EXISTS recurring_tasks (
+  id                INTEGER PRIMARY KEY AUTOINCREMENT,
+  name              TEXT    NOT NULL,
+  client_name       TEXT    NOT NULL,
+  owner_id          INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  priority          TEXT    NOT NULL DEFAULT 'normal' CHECK (priority IN ('high','normal')),
+  notes             TEXT,
+  label_id          INTEGER REFERENCES labels(id) ON DELETE SET NULL,
+  frequency         TEXT    NOT NULL CHECK (frequency IN ('daily','weekly','monthly')),
+  weekdays          TEXT,
+  month_day         TEXT,
+  due_after_days    INTEGER NOT NULL DEFAULT 0,
+  start_date        TEXT    NOT NULL,
+  end_date          TEXT,
+  active            INTEGER NOT NULL DEFAULT 1,
+  generated_through TEXT,
+  created_by        INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  created_at        TEXT    NOT NULL DEFAULT (datetime('now')),
+  updated_at        TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
 -- ---------------------------------------------------------------------------
 -- Projects.
 --

@@ -18,7 +18,12 @@ export default function LabelPicker({ value, onChange, disabled }) {
   const [error, setError] = useState(null);
 
   const load = () => api.get('/labels').then((d) => setLabels(d.labels)).catch(() => {});
-  useEffect(load, []);
+  // Not `useEffect(load, [])`: `load` returns a promise, and React insists an
+  // effect return nothing or a clean-up function — a promise crashes the
+  // component on mount.
+  useEffect(() => {
+    load();
+  }, []);
 
   const pick = (e) => {
     const v = e.target.value;

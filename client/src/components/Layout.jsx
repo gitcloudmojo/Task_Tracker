@@ -26,6 +26,7 @@ import Alerts from './Alerts.jsx';
 const NAV = [
   { to: '/', label: 'Home', icon: '◱', permission: null, badge: 'desk' },
   { to: '/tasks', label: 'All tasks', icon: '☰', permission: 'tasks.view_all' },
+  { to: '/recurring', label: 'Repeating', icon: '↻', permission: null },
   { to: '/chat', label: 'Chat', icon: '✉', permission: null, badge: 'chat' },
   { to: '/team', label: 'People', icon: '⚇', permission: 'team.view' },
   { to: '/projects', label: 'Projects', icon: '▤', permission: 'projects.view' },
