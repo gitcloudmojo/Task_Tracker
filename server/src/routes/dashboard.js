@@ -117,6 +117,48 @@ router.get(
       byLabel = [...labelMap.values()].sort((a, b) => b.live - a.live || b.total - a.total);
     }
 
+    /**
+     * Figures for the Home side panels. All taken from `rows`, so they are
+     * already limited to what this person may see.
+     *
+     *  - split:        where the live tasks sit — late with their owner, on
+     *                  time with their owner, or waiting for a check
+     *  - dueSoon:      what falls due in the next seven days
+     *  - waitingLongest / approvedRecently: the two short lists
+     */
+    const daysAgo = (ts) => (ts ? -daysToDue(String(ts).slice(0, 10)) : null);
+    const split = {
+      lateWithOwner: live.filter((t) => t.status === 'open' && overdueState(t).overdue).length,
+      onTimeWithOwner: live.filter((t) => t.status === 'open' && !overdueState(t).overdue).length,
+      toCheck: live.filter((t) => t.status === 'submitted' || t.status === 'verified').length,
+    };
+    const dueSoon = { today: 0, tomorrow: 0, later: 0 };
+    for (const t of dueThisWeek) {
+      const d = daysToDue(t.completion_date);
+      if (d === 0) dueSoon.today += 1;
+      else if (d === 1) dueSoon.tomorrow += 1;
+      else dueSoon.later += 1;
+    }
+    const slim = (t, extra) => ({
+      id: t.id,
+      name: t.name,
+      clientName: t.client_name,
+      ownerName: t.owner_name,
+      ...extra,
+    });
+    const waitingAll = live
+      .filter((t) => t.status === 'submitted' || t.status === 'verified')
+      .map((t) => ({ t, days: daysAgo(t.submitted_at) ?? 0 }))
+      .sort((a, b) => b.days - a.days);
+    const waitingLongest = waitingAll.slice(0, 4).map(({ t, days }) => slim(t, { days }));
+    const approvedAll = rows
+      .filter((t) => t.status === 'approved' && t.approved_at && daysAgo(t.approved_at) <= 7)
+      .sort((a, b) => String(b.approved_at).localeCompare(String(a.approved_at)));
+    const approvedRecently = {
+      count: approvedAll.length,
+      items: approvedAll.slice(0, 4).map((t) => slim(t, { approvedAt: t.approved_at })),
+    };
+
     const attention = live
       .map((t) => ({ t, d: daysToDue(t.completion_date) }))
       .sort((a, b) => a.d - b.d || (a.t.priority === 'high' ? -1 : 1))
@@ -197,6 +239,11 @@ router.get(
       byClient,
       byTeam,
       byLabel,
+      split,
+      dueSoon,
+      waitingLongest,
+      waitingCount: waitingAll.length,
+      approvedRecently,
       attention,
       generatedFor: today(),
     });

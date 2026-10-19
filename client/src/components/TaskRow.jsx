@@ -10,7 +10,7 @@ import { Link } from 'react-router-dom';
 import { Badge, ClipIcon } from './ui.jsx';
 import MoveButtons from './MoveButtons.jsx';
 import { STATUS, dueLabel, stepDueLabel } from '../lib/task.js';
-import { dateLabel } from '../lib/format.js';
+import { dateLabel, initialsOf } from '../lib/format.js';
 
 export default function TaskRow({
   task: t,
@@ -56,9 +56,21 @@ export default function TaskRow({
         </Link>
         <div className="t-sub">
           <span className="t-client">{t.clientName}</span>
-          {showOwner && <span className="muted">· {t.ownerName}</span>}
+          {showOwner && (
+            <span className="t-owner" title={`Owner: ${t.ownerName}`}>
+              <span className="t-av" aria-hidden="true">{initialsOf(t.ownerName)}</span>
+              {t.ownerName}
+            </span>
+          )}
           {t.priority === 'high' && <span className="flag-high">High</span>}
           {t.labelName && <span className="flag-label">{t.labelName}</span>}
+          {/* Made by a repeating schedule — each one is its own task, so this
+              is only a marker, not a different kind of row. */}
+          {t.recurringId && (
+            <span className="flag-repeat" title="Created by a repeating task">
+              ↻ repeats
+            </span>
+          )}
           {/* Says plainly that the owner's part is done, right next to the
               date that would otherwise read as if they were the ones late. */}
           {doneAwaitingSignOff && <span className="flag-pending">done — awaiting sign-off</span>}

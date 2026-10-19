@@ -26,8 +26,10 @@ import Layout from '../components/Layout.jsx';
 import TaskRow from '../components/TaskRow.jsx';
 import TaskModal from '../components/TaskModal.jsx';
 import ImportTasksModal from '../components/ImportTasksModal.jsx';
-import { Card, Empty, ErrorBanner, Badge } from '../components/ui.jsx';
+import { Card, Empty, ErrorBanner } from '../components/ui.jsx';
 import MySteps from '../components/MySteps.jsx';
+import KpiStrip, { kpiItems } from '../components/KpiStrip.jsx';
+import HomeRail, { useRailPrefs } from '../components/HomeRail.jsx';
 
 export default function Home() {
   const { user, can } = useAuth();
@@ -48,6 +50,7 @@ export default function Home() {
   const canCreate = can('tasks.create') || can('tasks.create_own');
   const [creating, setCreating] = useState(false);
   const [importing, setImporting] = useState(false);
+  const prefs = useRailPrefs(user.id);
 
   const load = () => {
     api.get('/tasks/queue').then(setQueue).catch(setError);
@@ -215,7 +218,12 @@ export default function Home() {
   return (
     <Layout
       title={`Good day, ${firstName}`}
-      subtitle={line()}
+      subtitle={
+        <>
+          <div>{line()}</div>
+          <KpiStrip items={kpiItems(dash)} />
+        </>
+      }
       actions={
         canCreate && (
           <>
@@ -311,94 +319,57 @@ export default function Home() {
           </div>
         )}
 
-        <div className="tabs">
-          {tabs.map((t) => (
-            <button
-              key={t.key}
-              className={`tab${active.key === t.key ? ' active' : ''}`}
-              onClick={() => setTab(t.key)}
-            >
-              {t.label}
-              <span className={`tab-count${t.count > 0 && t.key === active.key ? ' on' : ''}`}>
-                {t.count}
-              </span>
-            </button>
-          ))}
-        </div>
-
-        <Card hint={active.rows.length ? active.hint : undefined}>
-          {active.rows.length === 0 ? (
-            <Empty>{active.empty}</Empty>
-          ) : active.kind === 'steps' ? (
-            <MySteps steps={active.rows} onChanged={load} onError={setError} />
-          ) : (
-            <div className="t-list">
-              {active.rows.map((t) => (
-                <TaskRow
-                  key={t.id}
-                  task={t}
-                  showOwner={active.showOwner}
-                  showStatus={active.showStatus}
-                  showCheck={active.showCheck}
-                  actionable={active.actionable !== false}
-                  onChanged={load}
-                  onError={setError}
-                />
+        <div className={`home-grid${prefs.shown ? '' : ' no-rail'}`}>
+          <div className="home-main">
+            <div className="tabs-row">
+            <div className="tabs">
+              {tabs.map((t) => (
+                <button
+                  key={t.key}
+                  className={`tab${active.key === t.key ? ' active' : ''}`}
+                  onClick={() => setTab(t.key)}
+                >
+                  {t.label}
+                  <span className={`tab-count${t.count > 0 && t.key === active.key ? ' on' : ''}`}>
+                    {t.count}
+                  </span>
+                </button>
               ))}
             </div>
-          )}
-        </Card>
-
-        {/* The CEO's "bifurcations": every task grouped by the label a
-            Manager put on it — usually the wider project several different
-            people's tasks belong to — so pulling up "everything under
-            Website Relaunch" is one click, whoever ended up owning each
-            piece of it. Each row opens the same filtered list All tasks
-            already offers via its Label filter. */}
-        {isCeo && dash.byLabel?.length > 0 && (
-          <Card
-            title="By label"
-            hint="every task across the company, grouped by what it belongs to"
-            id="home-by-label"
-          >
-            <div className="table-scroll">
-              <table className="data">
-                <thead>
-                  <tr>
-                    <th>Label</th>
-                    <th className="num">Live</th>
-                    <th className="num">Late</th>
-                    <th className="num">To check</th>
-                    <th className="num">Approved</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {dash.byLabel.map((r) => (
-                    <tr key={r.id ?? 'none'}>
-                      <td>
-                        <Link to={`/tasks?label=${r.id ?? 'none'}`} className="strong">
-                          {r.key}
-                        </Link>
-                      </td>
-                      <td className="num">{r.live}</td>
-                      <td className="num">
-                        {r.overdue ? <Badge tone="critical">{r.overdue}</Badge> : <span className="muted">0</span>}
-                      </td>
-                      <td className="num">
-                        {r.awaitingReview ? (
-                          <Badge tone="accent">{r.awaitingReview}</Badge>
-                        ) : (
-                          <span className="muted">0</span>
-                        )}
-                      </td>
-                      <td className="num muted">{r.approved}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            {!prefs.shown && (
+              <button className="btn sm ghost" onClick={() => prefs.setShown(true)}>
+                ◂ Show panels
+              </button>
+            )}
             </div>
-          </Card>
-        )}
+
+            <Card hint={active.rows.length ? active.hint : undefined}>
+              {active.rows.length === 0 ? (
+                <Empty>{active.empty}</Empty>
+              ) : active.kind === 'steps' ? (
+                <MySteps steps={active.rows} onChanged={load} onError={setError} />
+              ) : (
+                <div className="t-list">
+                  {active.rows.map((t) => (
+                    <TaskRow
+                      key={t.id}
+                      task={t}
+                      showOwner={active.showOwner}
+                      showStatus={active.showStatus}
+                      showCheck={active.showCheck}
+                      actionable={active.actionable !== false}
+                      onChanged={load}
+                      onError={setError}
+                    />
+                  ))}
+                </div>
+              )}
+            </Card>
+          </div>
+          {prefs.shown ? (
+            <HomeRail dash={dash} isCeo={isCeo} prefs={prefs} />
+          ) : null}
+        </div>
 
         {/* One quiet line for the wider picture, for whoever can see it. Not a
             grid of numbers — a sentence with a way in. */}

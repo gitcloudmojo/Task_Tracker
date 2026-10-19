@@ -11,6 +11,7 @@ import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { api, qs } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
+import KpiStrip, { kpiItems } from '../components/KpiStrip.jsx';
 import Layout from '../components/Layout.jsx';
 import TaskRow from '../components/TaskRow.jsx';
 import TaskModal from '../components/TaskModal.jsx';
@@ -53,6 +54,8 @@ export default function Tasks() {
   const [owner, setOwner] = useState(params.get('owner') || '');
   const [client, setClient] = useState('');
   const [label, setLabel] = useState(params.get('label') || '');
+  // 'yes' = only what repeating schedules made, 'no' = only one-offs, or one schedule's id.
+  const [recurring, setRecurring] = useState(params.get('recurring') || '');
   const [search, setSearch] = useState('');
 
   const load = () => {
@@ -65,6 +68,7 @@ export default function Tasks() {
     if (owner) q.ownerId = owner;
     if (client) q.client = client;
     if (label) q.label = label;
+    if (recurring) q.recurring = recurring;
     if (search) q.q = search;
     api
       .get(`/tasks${qs(q)}`)
@@ -73,7 +77,7 @@ export default function Tasks() {
     api.get('/dashboard').then(setDash).catch(() => {});
   };
 
-  useEffect(load, [view, owner, client, label]);
+  useEffect(load, [view, owner, client, label, recurring]);
 
   useEffect(() => {
     const id = setTimeout(load, 250);
@@ -94,8 +98,10 @@ export default function Tasks() {
     else next.delete('owner');
     if (label) next.set('label', label);
     else next.delete('label');
+    if (recurring) next.set('recurring', recurring);
+    else next.delete('recurring');
     setParams(next, { replace: true });
-  }, [view, owner, label]);
+  }, [view, owner, label, recurring]);
 
   const t = dash?.totals;
   const rows = dash?.[group] || [];
@@ -103,11 +109,7 @@ export default function Tasks() {
   return (
     <Layout
       title="All tasks"
-      subtitle={
-        t
-          ? `${t.all} in total · ${t.live} live · ${t.overdue} late · ${dash.stalls.withVerifier} to check · ${dash.stalls.withApprover} to approve`
-          : undefined
-      }
+      subtitle={dash ? <KpiStrip items={kpiItems(dash)} /> : undefined}
       actions={
         <>
           {can('tasks.create') && (
@@ -162,6 +164,14 @@ export default function Tasks() {
               <option value="none">No label</option>
             </select>
           )}
+          <select value={recurring} onChange={(e) => setRecurring(e.target.value)} style={{ maxWidth: 170 }}>
+            <option value="">All tasks</option>
+            <option value="yes">↻ Repeating only</option>
+            <option value="no">One-off only</option>
+            {/* Arrived here from a schedule's "tasks so far" link — a single
+                schedule's id. Say so rather than showing a blank select. */}
+            {/^\d+$/.test(recurring) && <option value={recurring}>One repeating task</option>}
+          </select>
           <input
             type="text"
             placeholder="Search name, client or notes…"
